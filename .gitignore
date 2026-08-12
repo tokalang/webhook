@@ -1,0 +1,6 @@
+target/
+.toka/
+.toka_build_exe
+*.ll
+*.o
+*.dSYM/

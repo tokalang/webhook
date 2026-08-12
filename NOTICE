@@ -1,0 +1,12 @@
+Toka webhook is an independent implementation in Toka.
+
+It is a behavioral replication project based on adnanh/webhook at commit
+2548ffb800e0db0fc779acfc64fe624cee107af6.
+
+Upstream notice (complete text in LICENSES/adnanh-webhook-MIT.txt):
+Copyright (c) 2015 Adnan Hajdarevic <adnanh@gmail.com>
+Licensed under the MIT License.
+
+No upstream Go source, vendored dependency, test source, documentation, or
+artwork is copied into this repository unless a later change records the exact
+source and preserves its applicable notice and license.

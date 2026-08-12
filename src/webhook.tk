@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Toka contributors.
+// SPDX-License-Identifier: MIT
+//
+// Independent Toka implementation; upstream provenance is documented in NOTICE.
+
+import core/option::{Option}
+import core/result::{Result}
+import std/net::{TcpListener}
+import std/process::{Command}
+import std/vec::{Vec}
+import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, HttpServer}
+
+pub shape Hook (
+    id: string,
+    command: string,
+    args: Vec<string>,
+    required_header: string,
+    required_value: string
+)
+
+impl Hook {
+    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede required_header: string, cede required_value: string) -> Hook {
+        return Hook(id = cede id, command = cede command, args = cede args,
+                    required_header = cede required_header, required_value = cede required_value)
+    }
+}
+
+fn expected_path(hook: Hook) -> string {
+    auto value# = string::from("/hooks/")
+    value#.push_str(hook.id.as_str())
+    return value
+}
+
+fn authorized(hook: Hook, request: HttpRequest) -> bool {
+    auto actual = request.headers.get(hook.required_header.as_str())
+    if actual.is_none() { return false }
+    return actual.unwrap().as_str().equals(hook.required_value.as_str())
+}
+
+fn execute(hook: Hook) -> Result<i32, string> {
+    auto command# = Command::new(hook.command.clone())
+    command#.args(hook.args.clone())
+    auto status = command#.try_status()
+    if status.is_err() { return Result<i32, string>::Err(string::from("configured command could not be started")) }
+    auto exit = status.unwrap()
+    if !exit.success() { return Result<i32, string>::Err(string::from("configured command returned non-zero status")) }
+    return Result<i32, string>::Ok(0:i32)
+}
+
+// This initial policy permits exactly one literal header-equality rule and
+// invokes only configuration-owned argv strings. Request values never enter a
+// process command line or shell.
+pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
+    if request.method != HttpMethod::POST { return HttpResponse::not_found() }
+    if !request.path.as_str().equals(expected_path(hook).as_str()) {
+        return HttpResponse::not_found()
+    }
+    if !authorized(hook, request) { return HttpResponse::bad_request(string::from("hook trigger rule rejected request")) }
+    auto result = execute(hook)
+    if result.is_err() {
+        auto headers# = HeaderMap::new()
+        auto _header = headers#.insert(string::from("Content-Type"), string::from("text/plain"))
+        return HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),
+                            headers = cede headers, body = string::from("hook command failed"))
+    }
+    return HttpResponse::ok(string::from("hook triggered"))
+}
+
+pub fn serve_one_async(cede hook: Hook, cede listener: TcpListener, max_request_bytes: usize, timeout_ms: i32) -> async Result<i32, string> {
+    auto hook# = cede hook
+    auto listener# = cede listener
+    auto accepted = HttpServer::accept_async(listener, max_request_bytes, timeout_ms).await
+    if accepted.is_err() { return Result<i32, string>::Err(accepted.unwrap_err()) }
+    auto connection# = accepted.unwrap()
+    auto request = connection#.read_request_async().await
+    if request.is_err() {
+        auto _write = connection#.write_response_async(HttpResponse::bad_request(string::from("invalid HTTP request"))).await
+        connection#.close()
+        return Result<i32, string>::Err(string::from("invalid HTTP request"))
+    }
+    auto response = dispatch(hook, request.unwrap())
+    auto wrote = connection#.write_response_async(response).await
+    connection#.close()
+    if wrote.is_err() { return Result<i32, string>::Err(wrote.unwrap_err()) }
+    return Result<i32, string>::Ok(0:i32)
+}

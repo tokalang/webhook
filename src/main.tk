@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Toka contributors.
+// SPDX-License-Identifier: MIT
+
+import std/io::{println}
+
+pub fn main() -> i32 {
+    println("toka webhook: core HTTP dispatch is available as src/webhook.tk")
+    println("JSON configuration and the long-running CLI are not qualified yet; see UPSTREAM.md")
+    return 0
+}

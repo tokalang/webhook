@@ -1,0 +1,20 @@
+pub const PACKAGE = (
+    name = "webhook",
+    version = "0.1.0",
+    kind = "application",
+    license = "MIT",
+    compiler = "1.0.0-rc.3",
+    entry_modules = ("src/main.tk",),
+    targets = ("macos", "linux"),
+    dependencies = (),
+    native = (required = false, libraries = ())
+)
+
+pub const AI_CONTRACT = (
+    schema = "toka-application-v1",
+    summary = "A bounded HTTP-to-direct-argv webhook runner.",
+    capabilities = ("one JSON hook configuration", "header equality rule", "one request per connection", "direct argv command execution"),
+    non_goals = ("shell evaluation", "environment passing", "working-directory selection", "YAML", "TLS", "hot reload"),
+    safety = ("request-derived values never enter a shell; only literal configured arguments are executed"),
+    qualification = ("python3 tests/qualify.py")
+)
