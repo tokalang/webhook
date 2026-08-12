@@ -14,7 +14,7 @@ HTTP/process behavior on both Linux and macOS.
 | Request references | planned | Header, query, request, JSON/form/XML payload, and complete-source forms. |
 | Rule composition | planned | `and`, `or`, `not`, value, regex, IP, HMAC, Scalr signatures. |
 | Command arguments | partial | Literal arguments only; execution uses structured argv, never a shell. |
-| Child cwd/environment/files | planned | Toka now exposes per-child cwd/environment/stdio and cancellation; webhook still needs request-reference and temporary-file policy. |
+| Child cwd/environment/files | partial | `command-working-directory` now maps to Toka's per-child cwd; environment references and temporary-file policy remain. |
 | Command output response | planned | Must preserve stdout/stderr and non-zero status behavior. |
 | Hook response policy | planned | Response message, headers, status codes, allowed methods, mismatch code. |
 | HTTP server behavior | partial | One request per connection, serial acceptance, fixed `/hooks` prefix. |

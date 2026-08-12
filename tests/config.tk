@@ -1,9 +1,11 @@
 import webhook::{parse_hooks}
 
 fn main() -> i32 {
-    auto parsed = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[\"--quiet\",\"--dry-run\"],\"trigger-rule\":{\"match\":{\"value\":\"correct-horse\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Hook-Secret\"}}}}]")
+    auto parsed = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[\"--quiet\",\"--dry-run\"],\"command-working-directory\":\"/private/tmp\",\"trigger-rule\":{\"match\":{\"value\":\"correct-horse\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Hook-Secret\"}}}}]")
     assert(parsed.is_ok(), "valid upstream-shaped JSON hook configuration parses")
-    assert(parsed.unwrap().len() == 1:usize, "one configured hook is returned")
+    auto hooks = parsed.unwrap()
+    assert(hooks.len() == 1:usize, "one configured hook is returned")
+    assert(hooks.get_ref(0:usize).working_directory().as_str().equals("/private/tmp"), "working directory is retained")
 
     auto rejected = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"payload\",\"name\":\"x\"}}}}]")
     assert(rejected.is_err(), "non-header request interpolation is not silently accepted")

@@ -17,6 +17,7 @@ pub shape Hook (
     id: string,
     command: string,
     args: Vec<string>,
+    working_dir: string,
     required_header: string,
     required_value: string
 )
@@ -27,15 +28,18 @@ shape HeaderRule (
 )
 
 impl Hook {
-    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede required_header: string, cede required_value: string) -> Hook {
-        return Hook(id = cede id, command = cede command, args = cede args,
+    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede working_dir: string, cede required_header: string, cede required_value: string) -> Hook {
+        return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value)
     }
 
     pub fn clone(self) -> Hook {
         return Hook(id = self.id.clone(), command = self.command.clone(), args = self.args.clone(),
-                    required_header = self.required_header.clone(), required_value = self.required_value.clone())
+                    working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
+                    required_value = self.required_value.clone())
     }
+
+    pub fn working_directory(self) -> string { return self.working_dir.clone() }
 }
 
 fn required_field(fields#: HashMap<string, JsonNode>, key: str) -> Result<JsonNode, string> {
@@ -49,6 +53,12 @@ fn string_value(cede node: JsonNode) -> Result<string, string> {
         auto StrNode('text) => return Result<string, string>::Ok(cede 'text)
         _ => return Result<string, string>::Err(string::from("configuration value must be a JSON string"))
     }
+}
+
+fn optional_string(fields#: HashMap<string, JsonNode>, key: str, fallback: str) -> Result<string, string> {
+    auto found = fields#.remove(string::from(key))
+    if found.is_none() { return Result<string, string>::Ok(string::from(fallback)) }
+    return string_value(cede found.unwrap())
 }
 
 fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, string> {
@@ -108,9 +118,10 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto id = string_value(cede required_field(fields, "id")!)!
             auto command = string_value(cede required_field(fields, "execute-command")!)!
             auto args = optional_args(fields)!
+            auto working_dir = optional_string(fields, "command-working-directory", "")!
             auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
             return Result<Hook, string>::Ok(Hook::new(cede id, cede command, cede args,
-                                                      cede rule.name, cede rule.value))
+                                                      cede working_dir, cede rule.name, cede rule.value))
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
     }
@@ -160,6 +171,7 @@ fn authorized(hook: Hook, request: HttpRequest) -> bool {
 fn execute(hook: Hook) -> Result<i32, string> {
     auto command# = Command::new(hook.command.clone())
     command#.args(hook.args.clone())
+    if hook.working_dir.len() > 0:usize { command#.current_dir(hook.working_dir.clone()) }
     auto status = command#.try_status()
     if status.is_err() { return Result<i32, string>::Err(string::from("configured command could not be started")) }
     auto exit = status.unwrap()
