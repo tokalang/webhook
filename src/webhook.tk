@@ -33,7 +33,8 @@ pub shape Hook (
     success_status: i32,
     mismatch_status: i32,
     response_headers: Vec<ResponseHeader>,
-    methods: Vec<string>
+    methods: Vec<string>,
+    rule: TriggerRule
 )
 
 pub shape Argument (
@@ -66,17 +67,53 @@ shape HeaderRule (
     secret: string
 )
 
+impl HeaderRule {
+    fn clone(self) -> HeaderRule {
+        return HeaderRule(name = self.name.clone(), value = self.value.clone(), kind = self.kind.clone(), secret = self.secret.clone())
+    }
+}
+
+pub shape TriggerRule (
+    MatchNode(HeaderRule) = 0 |
+    AndNode(Vec<TriggerRule>) = 1 |
+    OrNode(Vec<TriggerRule>) = 2 |
+    NotNode(Vec<TriggerRule>) = 3
+)
+
+impl TriggerRule {
+    fn clone(self) -> TriggerRule {
+        match self {
+            auto MatchNode(&rule) => return TriggerRule::MatchNode(rule.clone())
+            auto AndNode(&rules) => return TriggerRule::AndNode(cede clone_rule_list(rules))
+            auto OrNode(&rules) => return TriggerRule::OrNode(cede clone_rule_list(rules))
+            auto NotNode(&rules) => return TriggerRule::NotNode(cede clone_rule_list(rules))
+        }
+    }
+}
+
+fn clone_rule_list(source: Vec<TriggerRule>) -> Vec<TriggerRule> {
+    auto result# = Vec<TriggerRule>::new()
+    auto index# = 0:usize
+    loop index < source.len() {
+        result#.push(cede source.get_ref(index).clone())
+        index = index + 1:usize
+    }
+    return result
+}
+
 impl Hook {
     pub fn new(cede id: string, cede command: string, cede args: Vec<Argument>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
         auto environment# = Vec<Argument>::new()
         auto response_headers# = Vec<ResponseHeader>::new()
         auto methods# = Vec<string>::new()
+        auto rule = TriggerRule::MatchNode(HeaderRule(name = required_header.clone(), value = required_value.clone(),
+                                                       kind = rule_kind.clone(), secret = rule_secret.clone()))
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value,
                     rule_kind = cede rule_kind, rule_secret = cede rule_secret, environment = cede environment,
                     response_message = string::from("hook triggered"), capture_output = false,
                     capture_output_on_error = false, success_status = 200:i32, mismatch_status = 400:i32,
-                    response_headers = cede response_headers, methods = cede methods)
+                    response_headers = cede response_headers, methods = cede methods, rule = cede rule)
     }
 
     pub fn clone(self) -> Hook {
@@ -105,7 +142,8 @@ impl Hook {
                     rule_secret = self.rule_secret.clone(), environment = cede environment,
                     response_message = self.response_message.clone(), capture_output = self.capture_output,
                     capture_output_on_error = self.capture_output_on_error, success_status = self.success_status,
-                    mismatch_status = self.mismatch_status, response_headers = cede response_headers, methods = cede methods)
+                    mismatch_status = self.mismatch_status, response_headers = cede response_headers, methods = cede methods,
+                    rule = self.rule.clone())
     }
 
     pub fn working_directory(self) -> string { return self.working_dir.clone() }
@@ -283,43 +321,90 @@ fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<Argument>, st
     }
 }
 
-fn header_rule(cede node: JsonNode) -> Result<HeaderRule, string> {
+fn parse_match(cede node: JsonNode) -> Result<HeaderRule, string> {
     match cede node {
-        auto ObjectNode('rule_fields) => {
-            auto rule_fields# = cede 'rule_fields
-            auto matching_node = required_field(rule_fields, "match")!
-            match cede matching_node {
-                auto ObjectNode('matching_fields) => {
-                    auto matching_fields# = cede 'matching_fields
-                    auto kind = optional_string(matching_fields, "type", "value")!
-                    auto expected = optional_string(matching_fields, "value", "")!
-                    auto secret = optional_string(matching_fields, "secret", "")!
-                    auto parameter_node = required_field(matching_fields, "parameter")!
-                    match cede parameter_node {
-                        auto ObjectNode('parameter_fields) => {
-                            auto parameter_fields# = cede 'parameter_fields
-                            auto source = string_value(cede required_field(parameter_fields, "source")!)!
-                            if !source.as_str().equals("header") {
-                                return Result<HeaderRule, string>::Err(string::from("only header trigger-rule parameters are supported"))
-                            }
-                            auto name = string_value(cede required_field(parameter_fields, "name")!)!
-                            if !kind.as_str().equals("value") && !kind.as_str().equals("payload-hmac-sha1") &&
-                               !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") {
-                                return Result<HeaderRule, string>::Err(string::from("unsupported trigger-rule match type"))
-                            }
-                            if !kind.as_str().equals("value") && secret.len() == 0:usize {
-                                return Result<HeaderRule, string>::Err(string::from("payload signature trigger-rule requires secret"))
-                            }
-                            return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected,
-                                kind = cede kind, secret = cede secret))
-                        }
-                        _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule parameter must be an object"))
+        auto ObjectNode('matching_fields) => {
+            auto matching_fields# = cede 'matching_fields
+            auto kind = optional_string(matching_fields, "type", "value")!
+            auto expected = optional_string(matching_fields, "value", "")!
+            auto secret = optional_string(matching_fields, "secret", "")!
+            auto parameter_node = required_field(matching_fields, "parameter")!
+            match cede parameter_node {
+                auto ObjectNode('parameter_fields) => {
+                    auto parameter_fields# = cede 'parameter_fields
+                    auto source = string_value(cede required_field(parameter_fields, "source")!)!
+                    if !source.as_str().equals("header") {
+                        return Result<HeaderRule, string>::Err(string::from("only header trigger-rule parameters are supported"))
                     }
+                    auto name = string_value(cede required_field(parameter_fields, "name")!)!
+                    if !kind.as_str().equals("value") && !kind.as_str().equals("payload-hmac-sha1") &&
+                       !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") {
+                        return Result<HeaderRule, string>::Err(string::from("unsupported trigger-rule match type"))
+                    }
+                    if !kind.as_str().equals("value") && secret.len() == 0:usize {
+                        return Result<HeaderRule, string>::Err(string::from("payload signature trigger-rule requires secret"))
+                    }
+                    return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected,
+                        kind = cede kind, secret = cede secret))
                 }
-                _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule match must be an object"))
+                _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule parameter must be an object"))
             }
         }
-        _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule must be an object"))
+        _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule match must be an object"))
+    }
+}
+
+fn parse_rule_list(cede node: JsonNode) -> Result<Vec<TriggerRule>, string> {
+    match cede node {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            auto rules# = Vec<TriggerRule>::new()
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<TriggerRule>, string>::Err(string::from("trigger-rule array changed during parse")) }
+                auto rule = parse_rule(cede item.unwrap())
+                if rule.is_err() { return Result<Vec<TriggerRule>, string>::Err(rule.unwrap_err()) }
+                rules#.push(cede rule.unwrap())
+            }
+            return Result<Vec<TriggerRule>, string>::Ok(cede rules)
+        }
+        _ => return Result<Vec<TriggerRule>, string>::Err(string::from("and/or trigger-rule must be an array"))
+    }
+}
+
+fn parse_rule(cede node: JsonNode) -> Result<TriggerRule, string> {
+    match cede node {
+        auto ObjectNode('fields) => {
+            auto fields# = cede 'fields
+            auto matching = fields#.remove(string::from("match"))
+            if matching.is_some() {
+                auto rule = parse_match(cede matching.unwrap())
+                if rule.is_err() { return Result<TriggerRule, string>::Err(rule.unwrap_err()) }
+                return Result<TriggerRule, string>::Ok(TriggerRule::MatchNode(cede rule.unwrap()))
+            }
+            auto and_node = fields#.remove(string::from("and"))
+            if and_node.is_some() {
+                auto rules = parse_rule_list(cede and_node.unwrap())
+                if rules.is_err() { return Result<TriggerRule, string>::Err(rules.unwrap_err()) }
+                return Result<TriggerRule, string>::Ok(TriggerRule::AndNode(cede rules.unwrap()))
+            }
+            auto or_node = fields#.remove(string::from("or"))
+            if or_node.is_some() {
+                auto rules = parse_rule_list(cede or_node.unwrap())
+                if rules.is_err() { return Result<TriggerRule, string>::Err(rules.unwrap_err()) }
+                return Result<TriggerRule, string>::Ok(TriggerRule::OrNode(cede rules.unwrap()))
+            }
+            auto not_node = fields#.remove(string::from("not"))
+            if not_node.is_some() {
+                auto rule = parse_rule(cede not_node.unwrap())
+                if rule.is_err() { return Result<TriggerRule, string>::Err(rule.unwrap_err()) }
+                auto rules# = Vec<TriggerRule>::new()
+                rules#.push(cede rule.unwrap())
+                return Result<TriggerRule, string>::Ok(TriggerRule::NotNode(cede rules))
+            }
+            return Result<TriggerRule, string>::Err(string::from("trigger-rule has no supported operator"))
+        }
+        _ => return Result<TriggerRule, string>::Err(string::from("trigger-rule must be an object"))
     }
 }
 
@@ -339,9 +424,9 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto mismatch_status = optional_status(fields, "trigger-rule-mismatch-http-response-code", 400:i32)!
             auto response_headers = optional_response_headers(fields)!
             auto methods = optional_methods(fields)!
-            auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
+            auto rule = parse_rule(cede required_field(fields, "trigger-rule")!)!
             auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
-                                   cede rule.name, cede rule.value, cede rule.kind, cede rule.secret)
+                                   cede string::from(""), cede string::from(""), cede string::from("value"), cede string::from(""))
             hook.environment = cede environment
             hook.response_message = cede response_message
             hook.capture_output = capture_output
@@ -350,6 +435,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             hook.mismatch_status = mismatch_status
             hook.response_headers = cede response_headers
             hook.methods = cede methods
+            hook.rule = cede rule
             return Result<Hook, string>::Ok(cede hook)
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
@@ -408,13 +494,49 @@ fn route_path(path: str) -> string {
 }
 
 fn authorized(hook: Hook, request: HttpRequest) -> bool {
-    auto actual = request.headers.get(hook.required_header.as_str())
+    return evaluate_rule(hook.rule, request)
+}
+
+fn evaluate_match(rule: HeaderRule, request: HttpRequest) -> bool {
+    auto actual = request.headers.get(rule.name.as_str())
     if actual.is_none() { return false }
-    if !hook.rule_kind.as_str().equals("value") {
-        return valid_payload_signature(hook.rule_kind.as_str(), hook.rule_secret.as_str(),
+    if !rule.kind.as_str().equals("value") {
+        return valid_payload_signature(rule.kind.as_str(), rule.secret.as_str(),
                                        actual.unwrap().as_str(), request.body.as_str())
     }
-    return actual.unwrap().as_str().equals(hook.required_value.as_str())
+    return actual.unwrap().as_str().equals(rule.value.as_str())
+}
+
+fn evaluate_rule(rule: TriggerRule, request: HttpRequest) -> bool {
+    match rule {
+        auto MatchNode('match) => return evaluate_match(cede 'match, request)
+        auto AndNode('rules) => {
+            auto rules# = cede 'rules
+            loop !rules.is_empty() {
+                auto child = rules#.remove(0:usize)
+                if child.is_none() { return false }
+                if !evaluate_rule(cede child.unwrap(), request) { return false }
+            }
+            return true
+        }
+        auto OrNode('rules) => {
+            auto rules# = cede 'rules
+            loop !rules.is_empty() {
+                auto child = rules#.remove(0:usize)
+                if child.is_some() {
+                    if evaluate_rule(cede child.unwrap(), request) { return true }
+                }
+            }
+            return false
+        }
+        auto NotNode('rules) => {
+            auto rules# = cede 'rules
+            if rules.len() != 1:usize { return false }
+            auto child = rules#.remove(0:usize)
+            if child.is_none() { return false }
+            return !evaluate_rule(cede child.unwrap(), request)
+        }
+    }
 }
 
 fn bytes_from_text(text: str) -> Bytes {
@@ -688,6 +810,7 @@ fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
     }
     return Option<Hook>::None
 }
+
 
 pub fn parse_port(text: str) -> Result<u16, string> {
     if text.len() == 0:usize { return Result<u16, string>::Err(string::from("port must not be empty")) }

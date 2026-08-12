@@ -108,5 +108,16 @@
         }
       }
     }
+  },
+  {
+    "id": "combined",
+    "execute-command": "/usr/bin/true",
+    "response-message": "combined accepted",
+    "trigger-rule": {
+      "and": [
+        {"match": {"value": "correct-horse", "parameter": {"source": "header", "name": "X-Hook-Secret"}}},
+        {"not": {"match": {"value": "deny", "parameter": {"source": "header", "name": "X-Deny"}}}}
+      ]
+    }
   }
 ]

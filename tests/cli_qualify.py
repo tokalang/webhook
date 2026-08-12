@@ -21,11 +21,13 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST") -> tuple[int, bytes, str | None]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None) -> tuple[int, bytes, str | None]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
         headers["X-Trace"] = trace
+    if extra is not None:
+        headers.update(extra)
     headers["Content-Type"] = "application/json"
     connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
@@ -86,6 +88,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/get-only")
         if status != 405 or body != b"":
             raise RuntimeError(f"disallowed method response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/combined")
+        if status != 200 or body != b"combined accepted":
+            raise RuntimeError(f"nested trigger rule response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/combined", extra={"X-Deny": "deny"})
+        if status != 400 or body != b"hook trigger rule rejected request":
+            raise RuntimeError(f"negated trigger rule response was {(status, body)!r}")
     finally:
         server.terminate()
         try:
