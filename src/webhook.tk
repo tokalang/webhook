@@ -732,6 +732,13 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         return query_argument(request.path.as_str(), argument.name.as_str())
     }
     if argument.source.as_str().equals("payload") {
+        auto content_type = request.headers.get("content-type")
+        if content_type.is_some() {
+            auto content_type_value = content_type.unwrap()
+            if content_type_value.as_str().starts_with("application/x-www-form-urlencoded") {
+                return form_argument(request.body.as_str(), argument.name.as_str())
+            }
+        }
         return payload_argument(request.body.as_str(), argument.name.as_str())
     }
     if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
@@ -864,6 +871,31 @@ fn query_argument(path: str, name: str) -> Result<string, string> {
         offset = end + 1:usize
     }
     return Result<string, string>::Err(string::from("required URL query value is missing"))
+}
+
+fn form_argument(body: str, name: str) -> Result<string, string> {
+    auto offset# = 0:usize
+    loop offset <= body.len() {
+        auto end# = offset
+        loop end < body.len() && body.byte_at(end) != '&' { end = end + 1:usize }
+        auto piece = text_slice(body, offset, end)
+        auto equals = piece.as_str().index_of('=')
+        if equals.is_some() {
+            auto split_at = equals.unwrap()
+            auto raw_key = text_slice(piece.as_str(), 0:usize, split_at)
+            auto key = query_decode(cede raw_key)
+            if key.is_err() { return Result<string, string>::Err(string::from("invalid form encoding")) }
+            if key.unwrap().as_str().equals(name) {
+                auto raw_value = text_slice(piece.as_str(), split_at + 1:usize, piece.len())
+                auto value = query_decode(cede raw_value)
+                if value.is_err() { return Result<string, string>::Err(string::from("invalid form encoding")) }
+                return Result<string, string>::Ok(value.unwrap())
+            }
+        }
+        if end == body.len() { break }
+        offset = end + 1:usize
+    }
+    return Result<string, string>::Err(string::from("payload field is missing"))
 }
 
 fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {

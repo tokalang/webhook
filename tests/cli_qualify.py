@@ -21,14 +21,14 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None) -> tuple[int, bytes, str | None]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None, content_type: str = "application/json") -> tuple[int, bytes, str | None]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
         headers["X-Trace"] = trace
     if extra is not None:
         headers.update(extra)
-    headers["Content-Type"] = "application/json"
+    headers["Content-Type"] = content_type
     connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
     configured_header = response.getheader("X-Webhook-Response")
@@ -103,6 +103,9 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/headers")
         if status != 200 or b'"x-hook-secret":"correct-horse"' not in body:
             raise RuntimeError(f"complete header response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/form", b"message=hello+form", content_type="application/x-www-form-urlencoded")
+        if status != 200 or body != b"hello form":
+            raise RuntimeError(f"form payload response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

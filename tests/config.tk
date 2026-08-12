@@ -36,5 +36,8 @@ fn main() -> i32 {
 
     auto complete_headers = parse_hooks("[{\"id\":\"headers\",\"execute-command\":\"/usr/bin/true\",\"pass-environment-to-command\":[{\"source\":\"entire-headers\",\"envname\":\"ALL_HEADERS\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(complete_headers.is_ok(), "entire header configuration parses")
+
+    auto form = parse_hooks("[{\"id\":\"form\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[{\"source\":\"payload\",\"name\":\"message\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
+    assert(form.is_ok(), "form payload command configuration parses")
     return 0
 }
