@@ -21,7 +21,7 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None) -> tuple[int, bytes]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None) -> tuple[int, bytes, str | None]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
@@ -29,9 +29,10 @@ def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b
     headers["Content-Type"] = "application/json"
     connection.request("POST", path, body=body, headers=headers)
     response = connection.getresponse()
+    configured_header = response.getheader("X-Webhook-Response")
     body = response.read()
     connection.close()
-    return response.status, body
+    return response.status, body, configured_header
 
 
 def main() -> int:
@@ -54,27 +55,29 @@ def main() -> int:
                 stdout, stderr = server.communicate()
                 raise RuntimeError(f"webhook exited early: {stdout!r} {stderr!r}")
             try:
-                status, body = request(port, "correct-horse")
+                status, body, configured_header = request(port, "correct-horse")
                 break
             except OSError:
                 time.sleep(0.02)
         else:
             raise RuntimeError("webhook did not accept a loopback connection")
-        if (status, body) != (200, b"deployment accepted"):
+        if (status, body) != (202, b"deployment accepted"):
             raise RuntimeError(f"authorized webhook response was {(status, body)!r}")
-        status, body = request(port, "wrong")
-        if status != 400 or body != b"hook trigger rule rejected request":
+        if configured_header != "configured":
+            raise RuntimeError(f"configured response header was {configured_header!r}")
+        status, body, _ = request(port, "wrong")
+        if status != 403 or body != b"hook trigger rule rejected request":
             raise RuntimeError(f"unauthorized webhook response was {(status, body)!r}")
-        status, body = request(port, "correct-horse", "/hooks/env")
+        status, body, _ = request(port, "correct-horse", "/hooks/env")
         if status != 200 or body != b"webhook\n":
             raise RuntimeError(f"per-child environment response was {(status, body)!r}")
-        status, body = request(port, "correct-horse", "/hooks/query?message=hello+query")
+        status, body, _ = request(port, "correct-horse", "/hooks/query?message=hello+query")
         if status != 200 or body != b"hello query":
             raise RuntimeError(f"URL query command argument response was {(status, body)!r}")
-        status, body = request(port, "correct-horse", "/hooks/references", b"raw-body", "trace")
+        status, body, _ = request(port, "correct-horse", "/hooks/references", b"raw-body", "trace")
         if status != 200 or body != b"trace|raw-body|POST":
             raise RuntimeError(f"header/body/method command argument response was {(status, body)!r}")
-        status, body = request(port, "correct-horse", "/hooks/payload", b'{"repository":{"name":"toka"}}')
+        status, body, _ = request(port, "correct-horse", "/hooks/payload", b'{"repository":{"name":"toka"}}')
         if status != 200 or body != b"toka":
             raise RuntimeError(f"JSON payload command argument response was {(status, body)!r}")
     finally:

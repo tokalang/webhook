@@ -3,6 +3,11 @@
     "id": "deploy",
     "execute-command": "/usr/bin/true",
     "response-message": "deployment accepted",
+    "success-http-response-code": 202,
+    "trigger-rule-mismatch-http-response-code": 403,
+    "response-headers": [
+      {"name": "X-Webhook-Response", "value": "configured"}
+    ],
     "pass-arguments-to-command": [],
     "trigger-rule": {
       "match": {

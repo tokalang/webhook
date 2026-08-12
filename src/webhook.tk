@@ -7,13 +7,13 @@ import core/option::{Option}
 import core/result::{Result}
 import std/fs::{read_to_string}
 import std/hashmap::{HashMap}
-import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
+import std/net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}
 import std/process::{Command}
 import std/bytes::{Bytes}
 import std/vec::{Vec}
 import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
 import stdx/encoding/hex
-import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, HttpServer}
+import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit}
 import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode}
 
@@ -29,7 +29,10 @@ pub shape Hook (
     environment: Vec<Argument>,
     response_message: string,
     capture_output: bool,
-    capture_output_on_error: bool
+    capture_output_on_error: bool,
+    success_status: i32,
+    mismatch_status: i32,
+    response_headers: Vec<ResponseHeader>
 )
 
 pub shape Argument (
@@ -37,6 +40,17 @@ pub shape Argument (
     name: string,
     env_name: string
 )
+
+pub shape ResponseHeader (
+    name: string,
+    value: string
+)
+
+impl ResponseHeader {
+    pub fn clone(self) -> ResponseHeader {
+        return ResponseHeader(name = self.name.clone(), value = self.value.clone())
+    }
+}
 
 impl Argument {
     pub fn clone(self) -> Argument {
@@ -54,11 +68,13 @@ shape HeaderRule (
 impl Hook {
     pub fn new(cede id: string, cede command: string, cede args: Vec<Argument>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
         auto environment# = Vec<Argument>::new()
+        auto response_headers# = Vec<ResponseHeader>::new()
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value,
                     rule_kind = cede rule_kind, rule_secret = cede rule_secret, environment = cede environment,
                     response_message = string::from("hook triggered"), capture_output = false,
-                    capture_output_on_error = false)
+                    capture_output_on_error = false, success_status = 200:i32, mismatch_status = 400:i32,
+                    response_headers = cede response_headers)
     }
 
     pub fn clone(self) -> Hook {
@@ -74,12 +90,19 @@ impl Hook {
             environment#.push(cede self.environment.get_ref(index).clone())
             index = index + 1:usize
         }
+        auto response_headers# = Vec<ResponseHeader>::new()
+        index = 0:usize
+        loop index < self.response_headers.len() {
+            response_headers#.push(cede self.response_headers.get_ref(index).clone())
+            index = index + 1:usize
+        }
         return Hook(id = self.id.clone(), command = self.command.clone(), args = cede args,
                     working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
                     required_value = self.required_value.clone(), rule_kind = self.rule_kind.clone(),
                     rule_secret = self.rule_secret.clone(), environment = cede environment,
                     response_message = self.response_message.clone(), capture_output = self.capture_output,
-                    capture_output_on_error = self.capture_output_on_error)
+                    capture_output_on_error = self.capture_output_on_error, success_status = self.success_status,
+                    mismatch_status = self.mismatch_status, response_headers = cede response_headers)
     }
 
     pub fn working_directory(self) -> string { return self.working_dir.clone() }
@@ -115,6 +138,51 @@ fn optional_bool(fields#: HashMap<string, JsonNode>, key: str, fallback: bool) -
     auto found = fields#.remove(string::from(key))
     if found.is_none() { return Result<bool, string>::Ok(fallback) }
     return bool_value(cede found.unwrap())
+}
+
+fn optional_status(fields#: HashMap<string, JsonNode>, key: str, fallback: i32) -> Result<i32, string> {
+    auto found = fields#.remove(string::from(key))
+    if found.is_none() { return Result<i32, string>::Ok(fallback) }
+    match cede found.unwrap() {
+        auto NumNode(value) => {
+            auto status = value as i32
+            if value != status as f64 || status < 100:i32 || status > 599:i32 {
+                return Result<i32, string>::Err(string::from("HTTP response status must be an integer from 100 through 599"))
+            }
+            return Result<i32, string>::Ok(status)
+        }
+        _ => return Result<i32, string>::Err(string::from("HTTP response status must be a JSON number"))
+    }
+}
+
+fn optional_response_headers(fields#: HashMap<string, JsonNode>) -> Result<Vec<ResponseHeader>, string> {
+    auto found = fields#.remove(string::from("response-headers"))
+    auto headers# = Vec<ResponseHeader>::new()
+    if found.is_none() { return Result<Vec<ResponseHeader>, string>::Ok(cede headers) }
+    match cede found.unwrap() {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<ResponseHeader>, string>::Err(string::from("response header array changed during parse")) }
+                match cede item.unwrap() {
+                    auto ObjectNode('fields) => {
+                        auto fields# = cede 'fields
+                        auto name = string_value(cede required_field(fields, "name")!)!
+                        auto value = string_value(cede required_field(fields, "value")!)!
+                        auto probe# = HeaderMap::new()
+                        if probe#.insert(name.clone(), value.clone()).is_err() {
+                            return Result<Vec<ResponseHeader>, string>::Err(string::from("response header is invalid"))
+                        }
+                        headers#.push(cede ResponseHeader(name = cede name, value = cede value))
+                    }
+                    _ => return Result<Vec<ResponseHeader>, string>::Err(string::from("response header must be an object"))
+                }
+            }
+            return Result<Vec<ResponseHeader>, string>::Ok(cede headers)
+        }
+        _ => return Result<Vec<ResponseHeader>, string>::Err(string::from("response-headers must be a JSON array"))
+    }
 }
 
 fn parse_argument_fields(fields#: HashMap<string, JsonNode>) -> Result<Argument, string> {
@@ -242,6 +310,9 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto response_message = optional_string(fields, "response-message", "hook triggered")!
             auto capture_output = optional_bool(fields, "include-command-output-in-response", false)!
             auto capture_output_on_error = optional_bool(fields, "include-command-output-in-response-on-error", false)!
+            auto success_status = optional_status(fields, "success-http-response-code", 200:i32)!
+            auto mismatch_status = optional_status(fields, "trigger-rule-mismatch-http-response-code", 400:i32)!
+            auto response_headers = optional_response_headers(fields)!
             auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
             auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
                                    cede rule.name, cede rule.value, cede rule.kind, cede rule.secret)
@@ -249,6 +320,9 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             hook.response_message = cede response_message
             hook.capture_output = capture_output
             hook.capture_output_on_error = capture_output_on_error
+            hook.success_status = success_status
+            hook.mismatch_status = mismatch_status
+            hook.response_headers = cede response_headers
             return Result<Hook, string>::Ok(cede hook)
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
@@ -520,21 +594,38 @@ fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
 
 // This partial policy accepts a header value or payload HMAC rule and invokes
 // only configuration-owned argv strings. Request values never enter a shell.
+fn configured_headers(hook: Hook) -> HeaderMap {
+    auto headers# = HeaderMap::new()
+    auto _type = headers#.insert(string::from("Content-Type"), string::from("text/plain"))
+    auto index# = 0:usize
+    loop index < hook.response_headers.len() {
+        auto header = hook.response_headers.get_ref(index).clone()
+        auto inserted = headers#.insert(cede header.name, cede header.value)
+        index = index + 1:usize
+    }
+    return headers
+}
+
 pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
     if request.method != HttpMethod::POST { return HttpResponse::not_found() }
     auto request_path = route_path(request.path.as_str())
     if !request_path.as_str().equals(expected_path(hook).as_str()) {
         return HttpResponse::not_found()
     }
-    if !authorized(hook, request) { return HttpResponse::bad_request(string::from("hook trigger rule rejected request")) }
+    if !authorized(hook, request) {
+        auto headers = configured_headers(hook)
+        return HttpResponse(status_code = hook.mismatch_status, content_type = string::from("text/plain"),
+                            headers = cede headers, body = string::from("hook trigger rule rejected request"))
+    }
     auto result = execute(hook, request)
     if result.is_err() {
-        auto headers# = HeaderMap::new()
-        auto _header = headers#.insert(string::from("Content-Type"), string::from("text/plain"))
+        auto headers = configured_headers(hook)
         return HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),
                             headers = cede headers, body = string::from("hook command failed"))
     }
-    return HttpResponse::ok(result.unwrap())
+    auto headers = configured_headers(hook)
+    return HttpResponse(status_code = hook.success_status, content_type = string::from("text/plain"),
+                        headers = cede headers, body = result.unwrap())
 }
 
 fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
@@ -563,6 +654,102 @@ pub fn parse_port(text: str) -> Result<u16, string> {
     return Result<u16, string>::Ok(value as u16)
 }
 
+fn status_phrase(status: i32) -> string {
+    if status == 200:i32 { return string::from("OK") }
+    if status == 201:i32 { return string::from("Created") }
+    if status == 202:i32 { return string::from("Accepted") }
+    if status == 204:i32 { return string::from("No Content") }
+    if status == 400:i32 { return string::from("Bad Request") }
+    if status == 401:i32 { return string::from("Unauthorized") }
+    if status == 403:i32 { return string::from("Forbidden") }
+    if status == 404:i32 { return string::from("Not Found") }
+    if status == 405:i32 { return string::from("Method Not Allowed") }
+    if status == 409:i32 { return string::from("Conflict") }
+    if status == 422:i32 { return string::from("Unprocessable Content") }
+    if status == 500:i32 { return string::from("Internal Server Error") }
+    return string::from("Webhook")
+}
+
+fn response_wire(response: HttpResponse) -> string {
+    auto wire# = string::from("HTTP/1.1 ")
+    wire#.push_str(string::from_int(response.status_code).as_str())
+    wire#.push_str(" ")
+    wire#.push_str(status_phrase(response.status_code).as_str())
+    auto wrote_content_type# = false
+    auto index# = 0:usize
+    loop index < response.headers.entries.len() {
+        auto header = response.headers.entries.get_ref(index).clone()
+        if !header.key.as_str().eq_ignore_ascii_case("content-length") &&
+           !header.key.as_str().eq_ignore_ascii_case("connection") {
+            wire#.push_str("\r\n")
+            wire#.push_str(header.key.as_str())
+            wire#.push_str(": ")
+            wire#.push_str(header.value.as_str())
+            if header.key.as_str().eq_ignore_ascii_case("content-type") { wrote_content_type = true }
+        }
+        index = index + 1:usize
+    }
+    if !wrote_content_type {
+        wire#.push_str("\r\nContent-Type: ")
+        wire#.push_str(response.content_type.as_str())
+    }
+    wire#.push_str("\r\nContent-Length: ")
+    wire#.push_str(string::from_int(response.body.len()).as_str())
+    wire#.push_str("\r\nConnection: close\r\n\r\n")
+    wire#.push_str(response.body.as_str())
+    return wire
+}
+
+fn wire_bytes(wire: str) -> Vec<u8> {
+    auto bytes# = Vec<u8>::with_capacity(wire.len())
+    auto index# = 0:usize
+    loop index < wire.len() {
+        bytes#.push(wire.byte_at(index) as u8)
+        index = index + 1:usize
+    }
+    return bytes
+}
+
+fn write_local_response_async(stream#: TcpStream, response: HttpResponse, timeout_ms: i32) -> async Result<(), string> {
+    auto wire = response_wire(response)
+    auto written = stream#.write_from_async(cede wire_bytes(wire.as_str()), timeout_ms).await
+    if written.is_err() { return Result<(), string>::Err(written.unwrap_err().message) }
+    auto completed# = written.unwrap()
+    auto complete = completed.complete
+    auto _buffer = completed#.take_buffer()
+    if !complete { return Result<(), string>::Err(string::from("incomplete HTTP response write")) }
+    return Result<(), string>::Ok(())
+}
+
+fn read_local_request_async(stream#: TcpStream, max_request_bytes: usize, timeout_ms: i32) -> async Result<HttpRequest, string> {
+    auto received# = Vec<u8>::with_capacity(4096:usize)
+    auto buffer# = Vec<u8>::with_capacity(4096:usize)
+    auto last_error# = string::from("malformed or incomplete HTTP request")
+    loop received.len() < max_request_bytes {
+        auto read_result = stream#.read_into_async(cede buffer, 4096:usize, timeout_ms).await
+        if read_result.is_err() { return Result<HttpRequest, string>::Err(read_result.unwrap_err().message) }
+        auto chunk# = read_result.unwrap()
+        auto count = chunk.bytes_read
+        buffer = chunk#.take_buffer()
+        if count == 0:usize { return Result<HttpRequest, string>::Err(cede last_error) }
+        auto index# = 0:usize
+        loop index < count {
+            received#.push(buffer#.get(index))
+            index = index + 1:usize
+        }
+        auto text# = string::from("")
+        index = 0:usize
+        loop index < received.len() {
+            text#.push_byte_raw(received#.get(index))
+            index = index + 1:usize
+        }
+        auto parsed = parse_http_request_with_limit(text, max_request_bytes)
+        if parsed.is_ok() { return parsed }
+        last_error = parsed.unwrap_err()
+    }
+    return Result<HttpRequest, string>::Err(string::from("HTTP request exceeds configured size limit"))
+}
+
 // Requests are handled serially in this bounded initial implementation. The
 // accepted connection is always closed after one complete response.
 pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listener: TcpListener,
@@ -570,21 +757,20 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
     auto hooks# = cede supplied_hooks
     auto listener# = cede supplied_listener
     loop true {
-        auto accepted = HttpServer::accept_async(listener, max_request_bytes, timeout_ms).await
-        if accepted.is_err() { continue }
-        auto connection# = accepted.unwrap()
-        auto received = connection#.read_request_async().await
+        auto stream# = listener#.accept_async().await
+        if !stream.is_valid() { continue }
+        auto received = read_local_request_async(stream, max_request_bytes, timeout_ms).await
         if received.is_err() {
-            auto _write = connection#.write_response_async(HttpResponse::bad_request(string::from("invalid HTTP request"))).await
-            connection#.close()
+            auto _write = write_local_response_async(stream, HttpResponse::bad_request(string::from("invalid HTTP request")), timeout_ms).await
+            stream#.close()
             continue
         }
         auto request = received.unwrap()
         auto selected = find_hook(hooks, request.path.as_str())
         auto response# = HttpResponse::not_found()
         if selected.is_some() { response = dispatch(selected.unwrap(), request) }
-        auto _write = connection#.write_response_async(response).await
-        connection#.close()
+        auto _write = write_local_response_async(stream, response, timeout_ms).await
+        stream#.close()
     }
     return 0:i32
 }
@@ -592,18 +778,17 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
 pub fn serve_one_async(cede hook: Hook, cede listener: TcpListener, max_request_bytes: usize, timeout_ms: i32) -> async Result<i32, string> {
     auto hook# = cede hook
     auto listener# = cede listener
-    auto accepted = HttpServer::accept_async(listener, max_request_bytes, timeout_ms).await
-    if accepted.is_err() { return Result<i32, string>::Err(accepted.unwrap_err()) }
-    auto connection# = accepted.unwrap()
-    auto request = connection#.read_request_async().await
+    auto stream# = listener#.accept_async().await
+    if !stream.is_valid() { return Result<i32, string>::Err(string::from("HTTP server accept failed")) }
+    auto request = read_local_request_async(stream, max_request_bytes, timeout_ms).await
     if request.is_err() {
-        auto _write = connection#.write_response_async(HttpResponse::bad_request(string::from("invalid HTTP request"))).await
-        connection#.close()
+        auto _write = write_local_response_async(stream, HttpResponse::bad_request(string::from("invalid HTTP request")), timeout_ms).await
+        stream#.close()
         return Result<i32, string>::Err(string::from("invalid HTTP request"))
     }
     auto response = dispatch(hook, request.unwrap())
-    auto wrote = connection#.write_response_async(response).await
-    connection#.close()
+    auto wrote = write_local_response_async(stream, response, timeout_ms).await
+    stream#.close()
     if wrote.is_err() { return Result<i32, string>::Err(wrote.unwrap_err()) }
     return Result<i32, string>::Ok(0:i32)
 }

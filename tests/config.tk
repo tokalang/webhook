@@ -18,5 +18,11 @@ fn main() -> i32 {
 
     auto payload_ref = parse_hooks("[{\"id\":\"payload\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[{\"source\":\"payload\",\"name\":\"repository.name\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(payload_ref.is_ok(), "JSON payload command argument configuration parses")
+
+    auto status_codes = parse_hooks("[{\"id\":\"status\",\"execute-command\":\"/usr/bin/true\",\"success-http-response-code\":202,\"trigger-rule-mismatch-http-response-code\":403,\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
+    assert(status_codes.is_ok(), "custom HTTP response status configuration parses")
+
+    auto headers = parse_hooks("[{\"id\":\"headers\",\"execute-command\":\"/usr/bin/true\",\"response-headers\":[{\"name\":\"X-Webhook\",\"value\":\"configured\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
+    assert(headers.is_ok(), "response header configuration parses")
     return 0
 }
