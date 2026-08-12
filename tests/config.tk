@@ -1,4 +1,4 @@
-import webhook::{parse_hooks}
+import webhook::{parse_default_methods, parse_hooks}
 
 fn main() -> i32 {
     auto parsed = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[\"--quiet\",\"--dry-run\"],\"command-working-directory\":\"/private/tmp\",\"trigger-rule\":{\"match\":{\"value\":\"correct-horse\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Hook-Secret\"}}}}]")
@@ -54,5 +54,9 @@ fn main() -> i32 {
 
     auto content_type_override = parse_hooks("[{\"id\":\"override\",\"execute-command\":\"/usr/bin/true\",\"incoming-payload-content-type\":\"application/json\",\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(content_type_override.is_ok(), "incoming payload content type configuration parses")
+
+    auto default_methods = parse_default_methods("GET, POST")
+    assert(default_methods.is_ok(), "default HTTP methods parse")
+    assert(default_methods.unwrap().len() == 2:usize, "default HTTP methods include both values")
     return 0
 }

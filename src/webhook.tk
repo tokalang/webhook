@@ -252,6 +252,17 @@ fn optional_methods(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, s
     }
 }
 
+pub fn parse_default_methods(text: str) -> Result<Vec<string>, string> {
+    auto methods# = Vec<string>::new()
+    auto parts# = string::from(text).split(',' as i32)
+    loop !parts.is_done() {
+        auto method = parts#.next().trim().to_upper()
+        if method.len() == 0:usize { return Result<Vec<string>, string>::Err(string::from("HTTP method must be a non-empty string")) }
+        methods#.push(cede method)
+    }
+    return Result<Vec<string>, string>::Ok(cede methods)
+}
+
 fn parse_argument_fields(fields#: HashMap<string, JsonNode>) -> Result<Argument, string> {
     auto source = optional_string(fields, "source", "string")!
     auto name = optional_string(fields, "name", "")!
@@ -1293,6 +1304,26 @@ pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
                         headers = cede headers, body = result.unwrap())
 }
 
+fn default_methods_allow(defaults: Vec<string>, method: HttpMethod, headers: HeaderMap) -> bool {
+    if defaults.len() == 0:usize { return true }
+    auto actual = request_method(method, headers)
+    if actual.len() == 0:usize { return false }
+    auto index# = 0:usize
+    loop index < defaults.len() {
+        if defaults.get_ref(index).as_str().equals(actual.as_str()) { return true }
+        index = index + 1:usize
+    }
+    return false
+}
+
+fn dispatch_with_default_methods(hook: Hook, request: HttpRequest, defaults: Vec<string>) -> HttpResponse {
+    if hook.methods.len() == 0:usize && !default_methods_allow(defaults, request.method, request.headers.clone()) {
+        return HttpResponse(status_code = 405:i32, content_type = string::from("text/plain"),
+                            headers = configured_headers(hook), body = string::from(""))
+    }
+    return dispatch(hook, request)
+}
+
 fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
     auto route = route_path(path)
     auto index# = 0:usize
@@ -1546,10 +1577,12 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
 // enum payloads while retaining deterministic per-request configuration.
 pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listener: TcpListener,
                                 cede supplied_headers: Vec<ResponseHeader>,
+                                cede supplied_default_methods: Vec<string>,
                                 max_request_bytes: usize, timeout_ms: i32) -> async i32 {
     auto hooks_path# = cede supplied_path
     auto listener# = cede supplied_listener
     auto global_headers# = cede supplied_headers
+    auto default_methods# = cede supplied_default_methods
     loop true {
         auto stream# = listener#.accept_async().await
         if !stream.is_valid() { continue }
@@ -1567,7 +1600,7 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
                                     headers = HeaderMap::new(), body = string::from("failed to load hooks JSON"))
         } else {
             auto selected = find_hook(loaded.unwrap(), request.path.as_str())
-            if selected.is_some() { response = dispatch(selected.unwrap(), request) }
+            if selected.is_some() { response = dispatch_with_default_methods(selected.unwrap(), request, default_methods.clone()) }
         }
         apply_global_headers(response, global_headers)
         auto _write = write_local_response_async(stream, response, timeout_ms).await

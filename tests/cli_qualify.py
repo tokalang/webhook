@@ -46,7 +46,7 @@ def main() -> int:
 
     port = free_port()
     server = subprocess.Popen(
-        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*"],
+        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -131,6 +131,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/content-type-override", b'{"repository":{"name":"overridden"}}', content_type="text/plain")
         if status != 200 or body != b"overridden":
             raise RuntimeError(f"incoming content type override response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/default-method", method="GET")
+        if status != 200 or body != b"default method accepted":
+            raise RuntimeError(f"default HTTP method response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/default-method", method="DELETE")
+        if status != 405 or body != b"":
+            raise RuntimeError(f"default HTTP method rejection was {(status, body)!r}")
     finally:
         server.terminate()
         try:
