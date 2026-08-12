@@ -27,3 +27,6 @@ The initial restriction is not an equivalence claim. In particular, Toka's
 current `std/process::Command` has a direct argv API but no per-child
 environment or working-directory API; that gap is recorded in
 [`docs/toka-gaps.md`](docs/toka-gaps.md).
+
+The current Linux/macOS release contract and every remaining upstream feature
+are tracked in [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md).

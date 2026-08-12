@@ -29,6 +29,8 @@ The in-repository vertical slice implements a `POST /hooks/:id` endpoint,
 header equality authorization, JSON configuration loading, and command
 execution with a completed exit status. The known standard-library blocker for
 per-child cwd/environment is in [docs/toka-gaps.md](docs/toka-gaps.md).
+The complete Linux/macOS compatibility contract is in
+[docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
 ## Qualification
 
