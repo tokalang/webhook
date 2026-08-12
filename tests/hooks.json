@@ -2,7 +2,27 @@
   {
     "id": "deploy",
     "execute-command": "/usr/bin/true",
+    "response-message": "deployment accepted",
     "pass-arguments-to-command": [],
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
+  }
+  ,
+  {
+    "id": "env",
+    "execute-command": "/usr/bin/printenv",
+    "pass-arguments-to-command": ["WEBHOOK_TEST"],
+    "include-command-output-in-response": true,
+    "pass-environment-to-command": [
+      {"source": "string", "name": "webhook", "envname": "WEBHOOK_TEST"}
+    ],
     "trigger-rule": {
       "match": {
         "value": "correct-horse",

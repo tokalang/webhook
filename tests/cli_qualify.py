@@ -21,9 +21,9 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str) -> tuple[int, bytes]:
+def request(port: int, secret: str, path: str = "/hooks/deploy") -> tuple[int, bytes]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
-    connection.request("POST", "/hooks/deploy", body=b"{}", headers={"X-Hook-Secret": secret})
+    connection.request("POST", path, body=b"{}", headers={"X-Hook-Secret": secret})
     response = connection.getresponse()
     body = response.read()
     connection.close()
@@ -56,11 +56,14 @@ def main() -> int:
                 time.sleep(0.02)
         else:
             raise RuntimeError("webhook did not accept a loopback connection")
-        if (status, body) != (200, b"hook triggered"):
+        if (status, body) != (200, b"deployment accepted"):
             raise RuntimeError(f"authorized webhook response was {(status, body)!r}")
         status, body = request(port, "wrong")
         if status != 400 or body != b"hook trigger rule rejected request":
             raise RuntimeError(f"unauthorized webhook response was {(status, body)!r}")
+        status, body = request(port, "correct-horse", "/hooks/env")
+        if status != 200 or body != b"webhook\n":
+            raise RuntimeError(f"per-child environment response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

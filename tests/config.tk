@@ -9,5 +9,8 @@ fn main() -> i32 {
 
     auto rejected = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"payload\",\"name\":\"x\"}}}}]")
     assert(rejected.is_err(), "non-header request interpolation is not silently accepted")
+
+    auto signed = parse_hooks("[{\"id\":\"signed\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"type\":\"payload-hmac-sha256\",\"secret\":\"secret\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Signature\"}}}}]")
+    assert(signed.is_ok(), "payload HMAC configuration parses")
     return 0
 }

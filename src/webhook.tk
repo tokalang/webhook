@@ -9,7 +9,10 @@ import std/fs::{read_to_string}
 import std/hashmap::{HashMap}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
 import std/process::{Command}
+import std/bytes::{Bytes}
 import std/vec::{Vec}
+import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
+import stdx/encoding/hex
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, HttpServer}
 import stdx/serde/json::{JsonNode}
 
@@ -19,24 +22,57 @@ pub shape Hook (
     args: Vec<string>,
     working_dir: string,
     required_header: string,
-    required_value: string
+    required_value: string,
+    rule_kind: string,
+    rule_secret: string,
+    environment: Vec<Argument>,
+    response_message: string,
+    capture_output: bool,
+    capture_output_on_error: bool
 )
+
+pub shape Argument (
+    source: string,
+    name: string,
+    env_name: string
+)
+
+impl Argument {
+    pub fn clone(self) -> Argument {
+        return Argument(source = self.source.clone(), name = self.name.clone(), env_name = self.env_name.clone())
+    }
+}
 
 shape HeaderRule (
     name: string,
-    value: string
+    value: string,
+    kind: string,
+    secret: string
 )
 
 impl Hook {
-    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede working_dir: string, cede required_header: string, cede required_value: string) -> Hook {
+    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
+        auto environment# = Vec<Argument>::new()
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
-                    required_header = cede required_header, required_value = cede required_value)
+                    required_header = cede required_header, required_value = cede required_value,
+                    rule_kind = cede rule_kind, rule_secret = cede rule_secret, environment = cede environment,
+                    response_message = string::from("hook triggered"), capture_output = false,
+                    capture_output_on_error = false)
     }
 
     pub fn clone(self) -> Hook {
+        auto environment# = Vec<Argument>::new()
+        auto index# = 0:usize
+        loop index < self.environment.len() {
+            environment#.push(cede self.environment.get_ref(index).clone())
+            index = index + 1:usize
+        }
         return Hook(id = self.id.clone(), command = self.command.clone(), args = self.args.clone(),
                     working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
-                    required_value = self.required_value.clone())
+                    required_value = self.required_value.clone(), rule_kind = self.rule_kind.clone(),
+                    rule_secret = self.rule_secret.clone(), environment = cede environment,
+                    response_message = self.response_message.clone(), capture_output = self.capture_output,
+                    capture_output_on_error = self.capture_output_on_error)
     }
 
     pub fn working_directory(self) -> string { return self.working_dir.clone() }
@@ -59,6 +95,55 @@ fn optional_string(fields#: HashMap<string, JsonNode>, key: str, fallback: str) 
     auto found = fields#.remove(string::from(key))
     if found.is_none() { return Result<string, string>::Ok(string::from(fallback)) }
     return string_value(cede found.unwrap())
+}
+
+fn bool_value(cede node: JsonNode) -> Result<bool, string> {
+    match cede node {
+        auto BoolNode(value) => return Result<bool, string>::Ok(value)
+        _ => return Result<bool, string>::Err(string::from("configuration value must be a JSON boolean"))
+    }
+}
+
+fn optional_bool(fields#: HashMap<string, JsonNode>, key: str, fallback: bool) -> Result<bool, string> {
+    auto found = fields#.remove(string::from(key))
+    if found.is_none() { return Result<bool, string>::Ok(fallback) }
+    return bool_value(cede found.unwrap())
+}
+
+fn parse_argument(cede node: JsonNode) -> Result<Argument, string> {
+    match cede node {
+        auto ObjectNode('fields) => {
+            auto fields# = cede 'fields
+            auto source = optional_string(fields, "source", "string")!
+            auto name = optional_string(fields, "name", "")!
+            auto env_name = optional_string(fields, "envname", "")!
+            if name.len() == 0:usize && !source.as_str().equals("raw-request-body") {
+                return Result<Argument, string>::Err(string::from("argument source requires name"))
+            }
+            return Result<Argument, string>::Ok(Argument(source = cede source, name = cede name, env_name = cede env_name))
+        }
+        _ => return Result<Argument, string>::Err(string::from("command environment entry must be an object"))
+    }
+}
+
+fn optional_environment(fields#: HashMap<string, JsonNode>) -> Result<Vec<Argument>, string> {
+    auto found = fields#.remove(string::from("pass-environment-to-command"))
+    auto values# = Vec<Argument>::new()
+    if found.is_none() { return Result<Vec<Argument>, string>::Ok(cede values) }
+    match cede found.unwrap() {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<Argument>, string>::Err(string::from("environment array changed during parse")) }
+                auto parsed = parse_argument(cede item.unwrap())
+                if parsed.is_err() { return Result<Vec<Argument>, string>::Err(parsed.unwrap_err()) }
+                values#.push(cede parsed.unwrap())
+            }
+            return Result<Vec<Argument>, string>::Ok(cede values)
+        }
+        _ => return Result<Vec<Argument>, string>::Err(string::from("pass-environment-to-command must be a JSON array"))
+    }
 }
 
 fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, string> {
@@ -89,7 +174,9 @@ fn header_rule(cede node: JsonNode) -> Result<HeaderRule, string> {
             match cede matching_node {
                 auto ObjectNode('matching_fields) => {
                     auto matching_fields# = cede 'matching_fields
-                    auto expected = string_value(cede required_field(matching_fields, "value")!)!
+                    auto kind = optional_string(matching_fields, "type", "value")!
+                    auto expected = optional_string(matching_fields, "value", "")!
+                    auto secret = optional_string(matching_fields, "secret", "")!
                     auto parameter_node = required_field(matching_fields, "parameter")!
                     match cede parameter_node {
                         auto ObjectNode('parameter_fields) => {
@@ -99,7 +186,15 @@ fn header_rule(cede node: JsonNode) -> Result<HeaderRule, string> {
                                 return Result<HeaderRule, string>::Err(string::from("only header trigger-rule parameters are supported"))
                             }
                             auto name = string_value(cede required_field(parameter_fields, "name")!)!
-                            return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected))
+                            if !kind.as_str().equals("value") && !kind.as_str().equals("payload-hmac-sha1") &&
+                               !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") {
+                                return Result<HeaderRule, string>::Err(string::from("unsupported trigger-rule match type"))
+                            }
+                            if !kind.as_str().equals("value") && secret.len() == 0:usize {
+                                return Result<HeaderRule, string>::Err(string::from("payload signature trigger-rule requires secret"))
+                            }
+                            return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected,
+                                kind = cede kind, secret = cede secret))
                         }
                         _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule parameter must be an object"))
                     }
@@ -119,9 +214,18 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto command = string_value(cede required_field(fields, "execute-command")!)!
             auto args = optional_args(fields)!
             auto working_dir = optional_string(fields, "command-working-directory", "")!
+            auto environment = optional_environment(fields)!
+            auto response_message = optional_string(fields, "response-message", "hook triggered")!
+            auto capture_output = optional_bool(fields, "include-command-output-in-response", false)!
+            auto capture_output_on_error = optional_bool(fields, "include-command-output-in-response-on-error", false)!
             auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
-            return Result<Hook, string>::Ok(Hook::new(cede id, cede command, cede args,
-                                                      cede working_dir, cede rule.name, cede rule.value))
+            auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
+                                   cede rule.name, cede rule.value, cede rule.kind, cede rule.secret)
+            hook.environment = cede environment
+            hook.response_message = cede response_message
+            hook.capture_output = capture_output
+            hook.capture_output_on_error = capture_output_on_error
+            return Result<Hook, string>::Ok(cede hook)
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
     }
@@ -165,37 +269,118 @@ fn expected_path(hook: Hook) -> string {
 fn authorized(hook: Hook, request: HttpRequest) -> bool {
     auto actual = request.headers.get(hook.required_header.as_str())
     if actual.is_none() { return false }
+    if !hook.rule_kind.as_str().equals("value") {
+        return valid_payload_signature(hook.rule_kind.as_str(), hook.rule_secret.as_str(),
+                                       actual.unwrap().as_str(), request.body.as_str())
+    }
     return actual.unwrap().as_str().equals(hook.required_value.as_str())
 }
 
-fn execute(hook: Hook) -> Result<i32, string> {
+fn bytes_from_text(text: str) -> Bytes {
+    auto raw# = Vec<u8>::with_capacity(text.len())
+    auto index# = 0:usize
+    loop index < text.len() {
+        raw#.push(text.byte_at(index) as u8)
+        index = index + 1:usize
+    }
+    return Bytes::from_vec(cede raw)
+}
+
+fn valid_payload_signature(kind: str, secret: str, received: str, body: str) -> bool {
+    auto prefix# = "sha1="
+    if kind.equals("payload-hmac-sha256") { prefix = "sha256=" }
+    else if kind.equals("payload-hmac-sha512") { prefix = "sha512=" }
+    else if !kind.equals("payload-hmac-sha1") { return false }
+
+    auto source = string::from(received)
+    auto candidates# = source.split(',' as i32)
+    loop !candidates.is_done() {
+        auto candidate = candidates#.next().trim()
+        if candidate.as_str().starts_with(prefix) {
+            auto encoded = candidate.substring(prefix.len() as i32, candidate.len() as i32)
+            auto decoded = hex::decode(encoded.as_str())
+            if decoded.is_ok() {
+                auto expected = Bytes::from_vec(cede decoded.unwrap())
+                auto key = bytes_from_text(secret)
+                auto payload = bytes_from_text(body)
+                if kind.equals("payload-hmac-sha1") && hmac_sha1_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+                if kind.equals("payload-hmac-sha256") && hmac_sha256_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+                if kind.equals("payload-hmac-sha512") && hmac_sha512_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+            }
+        }
+    }
+    return false
+}
+
+fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, string> {
+    if argument.source.as_str().equals("string") { return Result<string, string>::Ok(argument.name.clone()) }
+    if argument.source.as_str().equals("header") {
+        auto value = request.headers.get(argument.name.as_str())
+        if value.is_none() { return Result<string, string>::Err(string::from("required request header is missing")) }
+        return Result<string, string>::Ok(value.unwrap())
+    }
+    if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
+    if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
+        if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
+        if request.method == HttpMethod::POST { return Result<string, string>::Ok(string::from("POST")) }
+        if request.method == HttpMethod::PUT { return Result<string, string>::Ok(string::from("PUT")) }
+        if request.method == HttpMethod::DELETE { return Result<string, string>::Ok(string::from("DELETE")) }
+    }
+    return Result<string, string>::Err(string::from("unsupported request argument source"))
+}
+
+fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
     auto command# = Command::new(hook.command.clone())
     command#.args(hook.args.clone())
     if hook.working_dir.len() > 0:usize { command#.current_dir(hook.working_dir.clone()) }
+    auto index# = 0:usize
+    loop index < hook.environment.len() {
+        auto binding = hook.environment.get_ref(index).clone()
+        auto value = resolve_argument(binding, request)
+        if value.is_err() { return Result<string, string>::Err(value.unwrap_err()) }
+        auto key# = binding.env_name.clone()
+        if key.len() == 0:usize {
+            key = string::from("HOOK_")
+            key#.push_str(binding.name.as_str())
+        }
+        command#.env(cede key, cede value.unwrap())
+        index = index + 1:usize
+    }
+    if hook.capture_output {
+        auto output = command#.output()
+        if output.is_err() { return Result<string, string>::Err(string::from("configured command could not be started")) }
+        auto completed = output.unwrap()
+        if completed.status.success() { return Result<string, string>::Ok(completed.stdout.clone()) }
+        if hook.capture_output_on_error {
+            auto text# = completed.stdout
+            text#.push_str(completed.stderr.as_str())
+            return Result<string, string>::Err(cede text)
+        }
+        return Result<string, string>::Err(string::from("configured command returned non-zero status"))
+    }
     auto status = command#.try_status()
-    if status.is_err() { return Result<i32, string>::Err(string::from("configured command could not be started")) }
+    if status.is_err() { return Result<string, string>::Err(string::from("configured command could not be started")) }
     auto exit = status.unwrap()
-    if !exit.success() { return Result<i32, string>::Err(string::from("configured command returned non-zero status")) }
-    return Result<i32, string>::Ok(0:i32)
+    if !exit.success() { return Result<string, string>::Err(string::from("configured command returned non-zero status")) }
+    return Result<string, string>::Ok(hook.response_message.clone())
 }
 
-// This initial policy permits exactly one literal header-equality rule and
-// invokes only configuration-owned argv strings. Request values never enter a
-// process command line or shell.
+// This partial policy accepts a header value or payload HMAC rule and invokes
+// only configuration-owned argv strings. Request values never enter a shell.
 pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
     if request.method != HttpMethod::POST { return HttpResponse::not_found() }
     if !request.path.as_str().equals(expected_path(hook).as_str()) {
         return HttpResponse::not_found()
     }
     if !authorized(hook, request) { return HttpResponse::bad_request(string::from("hook trigger rule rejected request")) }
-    auto result = execute(hook)
+    auto result = execute(hook, request)
     if result.is_err() {
         auto headers# = HeaderMap::new()
         auto _header = headers#.insert(string::from("Content-Type"), string::from("text/plain"))
         return HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),
                             headers = cede headers, body = string::from("hook command failed"))
     }
-    return HttpResponse::ok(string::from("hook triggered"))
+    return HttpResponse::ok(result.unwrap())
 }
 
 fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {

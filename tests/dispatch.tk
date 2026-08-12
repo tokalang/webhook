@@ -5,7 +5,7 @@ import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest}
 fn hook() -> Hook {
     auto args# = Vec<string>::new()
     return Hook::new(cede string::from("deploy"), cede string::from("/usr/bin/true"), cede args, cede string::from(""),
-                     cede string::from("X-Hook-Secret"), cede string::from("correct-horse"))
+                     cede string::from("X-Hook-Secret"), cede string::from("correct-horse"), cede string::from("value"), cede string::from(""))
 }
 
 fn request(method: HttpMethod, path: str, secret: str) -> HttpRequest {

@@ -9,14 +9,14 @@ HTTP/process behavior on both Linux and macOS.
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| JSON hooks file | partial | `id`, `execute-command`, literal `pass-arguments-to-command`, and value/header `trigger-rule.match` work. |
+| JSON hooks file | partial | `id`, `execute-command`, literal `pass-arguments-to-command`, `response-message`, command-output flags, and value/header or payload-HMAC `trigger-rule.match` work. |
 | YAML and template hooks files | planned | Requires parser/template compatibility corpus. |
 | Request references | planned | Header, query, request, JSON/form/XML payload, and complete-source forms. |
-| Rule composition | planned | `and`, `or`, `not`, value, regex, IP, HMAC, Scalr signatures. |
+| Rule composition | partial | Header value and HMAC-SHA1/SHA256/SHA512 match; `and`, `or`, `not`, regex, IP, and Scalr signatures remain. |
 | Command arguments | partial | Literal arguments only; execution uses structured argv, never a shell. |
-| Child cwd/environment/files | partial | `command-working-directory` now maps to Toka's per-child cwd; environment references and temporary-file policy remain. |
-| Command output response | planned | Must preserve stdout/stderr and non-zero status behavior. |
-| Hook response policy | planned | Response message, headers, status codes, allowed methods, mismatch code. |
+| Child cwd/environment/files | partial | `command-working-directory` and per-child environment (`string`, header, raw body, method) work; query/payload/complete sources and temporary-file policy remain. |
+| Command output response | partial | Successful stdout can be returned; stderr/error and status compatibility remain. |
+| Hook response policy | partial | `response-message` works; response headers, status codes, allowed methods, and mismatch code remain. |
 | HTTP server behavior | partial | One request per connection, serial acceptance, fixed `/hooks` prefix. |
 | TLS, ciphers, Unix socket | planned | TLS can use existing Toka TLS layer; Unix socket needs a platform adapter. |
 | Configuration reload and signals | planned | HUP/USR1 on Linux/macOS. |
