@@ -208,5 +208,17 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "json-array",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": ["%s", {"source": "payload", "name": "root.0.email"}],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]

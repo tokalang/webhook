@@ -903,11 +903,24 @@ fn payload_scalar(cede node: JsonNode) -> Result<string, string> {
     }
 }
 
+fn json_payload_is_array(body: str) -> bool {
+    auto index# = 0:usize
+    loop index < body.len() {
+        auto byte = body.byte_at(index)
+        if byte != ' ' && byte != '\t' && byte != '\r' && byte != '\n' { return byte == '[' }
+        index = index + 1:usize
+    }
+    return false
+}
+
 fn payload_argument(body: str, name: str) -> Result<string, string> {
     auto node# = JsonNode::NullNode(0):JsonNode
     auto parsed = node#.parse_json(body)
     if parsed.is_err() { return Result<string, string>::Err(string::from("request payload is not valid JSON")) }
     auto remaining# = string::from(name)
+    if json_payload_is_array(body) && remaining.as_str().starts_with("root.") {
+        remaining = text_slice(remaining.as_str(), 5:usize, remaining.len())
+    }
     loop true {
         match cede node {
             auto ObjectNode('fields) => {
