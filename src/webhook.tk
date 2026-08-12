@@ -735,6 +735,12 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         return payload_argument(request.body.as_str(), argument.name.as_str())
     }
     if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
+    if argument.source.as_str().equals("entire-payload") { return Result<string, string>::Ok(request.body.clone()) }
+    if argument.source.as_str().equals("entire-query") {
+        auto marker = request.path.as_str().index_of('?')
+        if marker.is_none() { return Result<string, string>::Ok(string::from("")) }
+        return Result<string, string>::Ok(text_slice(request.path.as_str(), marker.unwrap() + 1:usize, request.path.len()))
+    }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
         if request.method == HttpMethod::POST { return Result<string, string>::Ok(string::from("POST")) }
