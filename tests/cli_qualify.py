@@ -21,13 +21,13 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None) -> tuple[int, bytes, str | None]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST") -> tuple[int, bytes, str | None]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
         headers["X-Trace"] = trace
     headers["Content-Type"] = "application/json"
-    connection.request("POST", path, body=body, headers=headers)
+    connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
     configured_header = response.getheader("X-Webhook-Response")
     body = response.read()
@@ -80,6 +80,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/payload", b'{"repository":{"name":"toka"}}')
         if status != 200 or body != b"toka":
             raise RuntimeError(f"JSON payload command argument response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/get-only", method="GET")
+        if status != 200 or body != b"GET accepted":
+            raise RuntimeError(f"configured GET method response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/get-only")
+        if status != 405 or body != b"":
+            raise RuntimeError(f"disallowed method response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

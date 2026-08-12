@@ -30,6 +30,6 @@ fn main() -> i32 {
     assert(missing.status_code == 404:i32, "unknown hook is not found")
 
     auto wrong_method = dispatch(hook(), request(HttpMethod::GET, "/hooks/deploy", "correct-horse"))
-    assert(wrong_method.status_code == 404:i32, "only POST invokes a hook")
+    assert(wrong_method.status_code == 200:i32, "an unspecified method list permits the request")
     return 0
 }

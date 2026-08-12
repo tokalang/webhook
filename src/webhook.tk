@@ -32,7 +32,8 @@ pub shape Hook (
     capture_output_on_error: bool,
     success_status: i32,
     mismatch_status: i32,
-    response_headers: Vec<ResponseHeader>
+    response_headers: Vec<ResponseHeader>,
+    methods: Vec<string>
 )
 
 pub shape Argument (
@@ -69,12 +70,13 @@ impl Hook {
     pub fn new(cede id: string, cede command: string, cede args: Vec<Argument>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
         auto environment# = Vec<Argument>::new()
         auto response_headers# = Vec<ResponseHeader>::new()
+        auto methods# = Vec<string>::new()
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value,
                     rule_kind = cede rule_kind, rule_secret = cede rule_secret, environment = cede environment,
                     response_message = string::from("hook triggered"), capture_output = false,
                     capture_output_on_error = false, success_status = 200:i32, mismatch_status = 400:i32,
-                    response_headers = cede response_headers)
+                    response_headers = cede response_headers, methods = cede methods)
     }
 
     pub fn clone(self) -> Hook {
@@ -96,13 +98,14 @@ impl Hook {
             response_headers#.push(cede self.response_headers.get_ref(index).clone())
             index = index + 1:usize
         }
+        auto methods# = self.methods.clone()
         return Hook(id = self.id.clone(), command = self.command.clone(), args = cede args,
                     working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
                     required_value = self.required_value.clone(), rule_kind = self.rule_kind.clone(),
                     rule_secret = self.rule_secret.clone(), environment = cede environment,
                     response_message = self.response_message.clone(), capture_output = self.capture_output,
                     capture_output_on_error = self.capture_output_on_error, success_status = self.success_status,
-                    mismatch_status = self.mismatch_status, response_headers = cede response_headers)
+                    mismatch_status = self.mismatch_status, response_headers = cede response_headers, methods = cede methods)
     }
 
     pub fn working_directory(self) -> string { return self.working_dir.clone() }
@@ -182,6 +185,28 @@ fn optional_response_headers(fields#: HashMap<string, JsonNode>) -> Result<Vec<R
             return Result<Vec<ResponseHeader>, string>::Ok(cede headers)
         }
         _ => return Result<Vec<ResponseHeader>, string>::Err(string::from("response-headers must be a JSON array"))
+    }
+}
+
+fn optional_methods(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, string> {
+    auto found = fields#.remove(string::from("http-methods"))
+    auto methods# = Vec<string>::new()
+    if found.is_none() { return Result<Vec<string>, string>::Ok(cede methods) }
+    match cede found.unwrap() {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<string>, string>::Err(string::from("HTTP method array changed during parse")) }
+                auto method = string_value(cede item.unwrap())
+                if method.is_err() { return Result<Vec<string>, string>::Err(string::from("HTTP method must be a non-empty string")) }
+                auto method_text = method.unwrap()
+                if method_text.len() == 0:usize { return Result<Vec<string>, string>::Err(string::from("HTTP method must be a non-empty string")) }
+                methods#.push(cede method_text.to_upper())
+            }
+            return Result<Vec<string>, string>::Ok(cede methods)
+        }
+        _ => return Result<Vec<string>, string>::Err(string::from("http-methods must be a JSON array"))
     }
 }
 
@@ -313,6 +338,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto success_status = optional_status(fields, "success-http-response-code", 200:i32)!
             auto mismatch_status = optional_status(fields, "trigger-rule-mismatch-http-response-code", 400:i32)!
             auto response_headers = optional_response_headers(fields)!
+            auto methods = optional_methods(fields)!
             auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
             auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
                                    cede rule.name, cede rule.value, cede rule.kind, cede rule.secret)
@@ -323,6 +349,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             hook.success_status = success_status
             hook.mismatch_status = mismatch_status
             hook.response_headers = cede response_headers
+            hook.methods = cede methods
             return Result<Hook, string>::Ok(cede hook)
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
@@ -606,11 +633,34 @@ fn configured_headers(hook: Hook) -> HeaderMap {
     return headers
 }
 
+fn method_text(method: HttpMethod) -> string {
+    if method == HttpMethod::GET { return string::from("GET") }
+    if method == HttpMethod::POST { return string::from("POST") }
+    if method == HttpMethod::PUT { return string::from("PUT") }
+    if method == HttpMethod::DELETE { return string::from("DELETE") }
+    return string::from("")
+}
+
+fn accepts_method(hook: Hook, method: HttpMethod) -> bool {
+    if hook.methods.len() == 0:usize { return true }
+    auto actual = method_text(method)
+    if actual.len() == 0:usize { return false }
+    auto index# = 0:usize
+    loop index < hook.methods.len() {
+        if hook.methods.get_ref(index).as_str().equals(actual.as_str()) { return true }
+        index = index + 1:usize
+    }
+    return false
+}
+
 pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
-    if request.method != HttpMethod::POST { return HttpResponse::not_found() }
     auto request_path = route_path(request.path.as_str())
     if !request_path.as_str().equals(expected_path(hook).as_str()) {
         return HttpResponse::not_found()
+    }
+    if !accepts_method(hook, request.method) {
+        return HttpResponse(status_code = 405:i32, content_type = string::from("text/plain"),
+                            headers = configured_headers(hook), body = string::from(""))
     }
     if !authorized(hook, request) {
         auto headers = configured_headers(hook)

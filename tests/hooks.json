@@ -93,5 +93,20 @@
         }
       }
     }
+  },
+  {
+    "id": "get-only",
+    "execute-command": "/usr/bin/true",
+    "response-message": "GET accepted",
+    "http-methods": ["get"],
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
   }
 ]
