@@ -185,5 +185,28 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "ip-local",
+    "execute-command": "/usr/bin/true",
+    "response-message": "local address accepted",
+    "trigger-rule": {
+      "match": {
+        "type": "ip-whitelist",
+        "ip-range": "127.0.0.0/8"
+      }
+    }
+  },
+  {
+    "id": "remote",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": ["%s", {"source": "request", "name": "remote-addr"}],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]

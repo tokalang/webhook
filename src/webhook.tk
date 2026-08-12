@@ -18,6 +18,9 @@ import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_h
 import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode, write_escaped_json_string}
 
+extern fn getpeername(fd: i32, *addr: void, *addrlen: u32) -> i32
+extern fn libc_free(*ptr: void) -> void
+
 pub shape Hook (
     id: string,
     command: string,
@@ -330,6 +333,12 @@ fn parse_match(cede node: JsonNode) -> Result<HeaderRule, string> {
             auto expected = optional_string(matching_fields, "value", "")!
             auto secret = optional_string(matching_fields, "secret", "")!
             auto regex = optional_string(matching_fields, "regex", "")!
+            auto ip_range = optional_string(matching_fields, "ip-range", "")!
+            if kind.as_str().equals("ip-whitelist") {
+                if ip_range.len() == 0:usize { return Result<HeaderRule, string>::Err(string::from("ip-whitelist requires ip-range")) }
+                return Result<HeaderRule, string>::Ok(HeaderRule(name = string::from("X-Toka-Webhook-Remote-Addr"),
+                    value = string::from(""), kind = cede kind, secret = cede ip_range))
+            }
             auto parameter_node = required_field(matching_fields, "parameter")!
             match cede parameter_node {
                 auto ObjectNode('parameter_fields) => {
@@ -608,7 +617,9 @@ fn evaluate_match(rule: HeaderRule, request: HttpRequest) -> bool {
     }
     if actual.is_none() { return negated }
     auto matched# = false
-    if kind.as_str().equals("regex") {
+    if kind.as_str().equals("ip-whitelist") {
+        matched = ipv4_in_ranges(actual.unwrap().as_str(), rule.secret.as_str())
+    } else if kind.as_str().equals("regex") {
         matched = posix_regex_matches(rule.secret.as_str(), actual.unwrap().as_str())
     } else if !kind.as_str().equals("value") {
         matched = valid_payload_signature(kind.as_str(), rule.secret.as_str(),
@@ -618,6 +629,76 @@ fn evaluate_match(rule: HeaderRule, request: HttpRequest) -> bool {
     }
     if negated { return !matched }
     return matched
+}
+
+fn ipv4_number(text: str) -> Result<u32, string> {
+    auto value# = 0:u32
+    auto component# = 0:u32
+    auto count# = 0:usize
+    auto index# = 0:usize
+    auto has_digit# = false
+    loop index <= text.len() {
+        if index == text.len() || text.byte_at(index) == '.' {
+            if count >= 4:usize || !has_digit || component > 255:u32 { return Result<u32, string>::Err(string::from("invalid IPv4 address")) }
+            value = (value << 8:u32) | component
+            component = 0:u32
+            count = count + 1:usize
+            has_digit = false
+        } else {
+            auto byte = text.byte_at(index)
+            if byte < '0' || byte > '9' { return Result<u32, string>::Err(string::from("invalid IPv4 address")) }
+            component = component * 10:u32 + (byte as u32 - '0' as u32)
+            has_digit = true
+        }
+        index = index + 1:usize
+    }
+    if count != 4:usize { return Result<u32, string>::Err(string::from("invalid IPv4 address")) }
+    return Result<u32, string>::Ok(value)
+}
+
+fn ipv4_in_ranges(address: str, ranges: str) -> bool {
+    auto parsed = ipv4_number(address)
+    if parsed.is_err() { return false }
+    auto target = parsed.unwrap()
+    auto offset# = 0:usize
+    loop offset < ranges.len() {
+        loop offset < ranges.len() && ranges.byte_at(offset) == ' ' { offset = offset + 1:usize }
+        auto end# = offset
+        loop end < ranges.len() && ranges.byte_at(end) != ' ' { end = end + 1:usize }
+        if end > offset {
+            auto item = text_slice(ranges, offset, end)
+            auto slash = item.as_str().index_of('/')
+            auto address_part# = item.clone()
+            auto bits# = 32:u32
+            if slash.is_some() {
+                auto slash_at = slash.unwrap()
+                address_part = text_slice(item.as_str(), 0:usize, slash_at)
+                auto bits_text = text_slice(item.as_str(), slash_at + 1:usize, item.len())
+                auto digit# = 0:usize
+                auto digit_count# = 0:usize
+                bits = 0:u32
+                loop digit < bits_text.len() {
+                    auto byte = bits_text.byte_at(digit)
+                    if byte < '0' || byte > '9' || digit_count >= 2:usize { bits = 33:u32; break }
+                    bits = bits * 10:u32 + (byte as u32 - '0' as u32)
+                    digit_count = digit_count + 1:usize
+                    digit = digit + 1:usize
+                }
+                if digit_count == 0:usize { bits = 33:u32 }
+            }
+            auto network = ipv4_number(address_part.as_str())
+            if network.is_ok() && bits <= 32:u32 {
+                if bits == 0:u32 { return true }
+                auto mask = (0xFFFFFFFF:u32) << (32:u32 - bits)
+                auto target_prefix = target & mask
+                auto network_value = network.unwrap()
+                auto network_prefix = network_value & mask
+                if target_prefix == network_prefix { return true }
+            }
+        }
+        offset = end + 1:usize
+    }
+    return false
 }
 
 // Toka's bundled regex package is not stable when the same rule accepts and
@@ -754,6 +835,16 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
     if argument.source.as_str().equals("entire-headers") { return Result<string, string>::Ok(headers_json(request.headers)) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         return Result<string, string>::Ok(request_method(request.method, request.headers))
+    }
+    if argument.source.as_str().equals("request") && argument.name.as_str().equals("remote-addr") {
+        auto address = request.headers.get("x-toka-webhook-remote-addr")
+        match address {
+            auto Some(&value) => {
+                if value.len() == 0:usize { return Result<string, string>::Err(string::from("remote address is unavailable")) }
+                return Result<string, string>::Ok(value.clone())
+            }
+            auto None => return Result<string, string>::Err(string::from("remote address is unavailable"))
+        }
     }
     return Result<string, string>::Err(string::from("unsupported request argument source"))
 }
@@ -1225,6 +1316,44 @@ fn request_wire_method(raw: str) -> Result<string, string> {
     }
 }
 
+fn peer_ipv4(stream#: TcpStream) -> Option<string> {
+    unsafe {
+        auto *address# = unsafe alloc [32] byte as *char
+        auto *length# = unsafe alloc [1] u32
+        length[0] = 32:u32
+        auto result = getpeername(stream#.get_fd(), *address as *void, *length as *u32)
+        if result != 0 {
+            libc_free(*address as *void)
+            libc_free(*length as *void)
+            return Option<string>::None
+        }
+        // Linux stores AF_INET in the first two bytes; macOS stores a length
+        // byte followed by AF_INET.  Never interpret an IPv6 sockaddr as IPv4.
+        auto *family0 = (*address as usize + 0:usize) as *u8
+        auto *family1 = (*address as usize + 1:usize) as *u8
+        if !(family0 == 2 && family1 == 0) && !(family0 == 16 && family1 == 2) {
+            libc_free(*address as *void)
+            libc_free(*length as *void)
+            return Option<string>::None
+        }
+        // sockaddr_in stores IPv4 octets at offsets 4 through 7 on POSIX.
+        auto *octet0 = (*address as usize + 4:usize) as *u8
+        auto *octet1 = (*address as usize + 5:usize) as *u8
+        auto *octet2 = (*address as usize + 6:usize) as *u8
+        auto *octet3 = (*address as usize + 7:usize) as *u8
+        auto text# = string::from_int(octet0 as i32)
+        text#.push_str(".")
+        text#.push_str(string::from_int(octet1 as i32).as_str())
+        text#.push_str(".")
+        text#.push_str(string::from_int(octet2 as i32).as_str())
+        text#.push_str(".")
+        text#.push_str(string::from_int(octet3 as i32).as_str())
+        libc_free(*address as *void)
+        libc_free(*length as *void)
+        return Option<string>::Some(cede text)
+    }
+}
+
 fn write_local_response_async(stream#: TcpStream, response: HttpResponse, timeout_ms: i32) -> async Result<(), string> {
     auto wire = response_wire(response)
     auto written = stream#.write_from_async(cede wire_bytes(wire.as_str()), timeout_ms).await
@@ -1264,6 +1393,11 @@ fn read_local_request_async(stream#: TcpStream, max_request_bytes: usize, timeou
             auto method = request_wire_method(text.as_str())
             if method.is_err() { return Result<HttpRequest, string>::Err(method.unwrap_err()) }
             auto _method = request.headers#.insert(string::from("X-Toka-Webhook-Method"), method.unwrap())
+            auto _peer = request.headers#.insert(string::from("X-Toka-Webhook-Remote-Addr"), string::from(""))
+            auto peer = peer_ipv4(stream)
+            if peer.is_some() {
+                auto _peer = request.headers#.insert(string::from("X-Toka-Webhook-Remote-Addr"), peer.unwrap())
+            }
             return Result<HttpRequest, string>::Ok(cede request)
         }
         last_error = parsed.unwrap_err()

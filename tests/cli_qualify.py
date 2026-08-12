@@ -115,6 +115,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/patch-only", method="PATCH")
         if status != 200 or body != b"PATCH accepted":
             raise RuntimeError(f"configured PATCH response was {(status, body)!r}")
+        status, body, _ = request(port, "", "/hooks/ip-local")
+        if status != 200 or body != b"local address accepted":
+            raise RuntimeError(f"IP whitelist response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/remote", extra={"X-Toka-Webhook-Remote-Addr": "203.0.113.9"})
+        if status != 200 or body != b"127.0.0.1":
+            raise RuntimeError(f"TCP peer address response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

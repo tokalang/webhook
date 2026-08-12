@@ -45,5 +45,8 @@ fn main() -> i32 {
 
     auto arbitrary_method = parse_hooks("[{\"id\":\"patch\",\"execute-command\":\"/usr/bin/true\",\"http-methods\":[\"PATCH\"],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(arbitrary_method.is_ok(), "arbitrary HTTP method configuration parses")
+
+    auto ip_rule = parse_hooks("[{\"id\":\"local\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"type\":\"ip-whitelist\",\"ip-range\":\"127.0.0.0/8\"}}}]")
+    assert(ip_rule.is_ok(), "IPv4 whitelist configuration parses")
     return 0
 }

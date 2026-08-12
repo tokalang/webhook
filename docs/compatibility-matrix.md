@@ -11,8 +11,8 @@ HTTP/process behavior on both Linux and macOS.
 | --- | --- | --- |
 | JSON hooks file | partial | `id`, `execute-command`, literal `pass-arguments-to-command`, `response-message`, command-output flags, and value/header or payload-HMAC `trigger-rule.match` work. |
 | YAML and template hooks files | planned | Requires parser/template compatibility corpus. |
-| Request references | partial | Command environment/argv support `string`, header, URL/query, JSON payload dotted paths, URL-encoded form fields, bounded XML dotted element paths, raw body, `request.method`, `entire-payload`, `entire-query`, and JSON `entire-headers`; XML attributes/entities and remote address remain. |
-| Rule composition | partial | Nested `and`, `or`, `not`, header value, POSIX ERE regex (Linux/macOS), and HMAC-SHA1/SHA256/SHA512 matches work; IP and Scalr signatures remain. |
+| Request references | partial | Command environment/argv support `string`, header, URL/query, JSON payload dotted paths, URL-encoded form fields, bounded XML dotted element paths, raw body, `request.method`, IPv4 `request.remote-addr`, `entire-payload`, `entire-query`, and JSON `entire-headers`; XML attributes/entities and IPv6 remain. |
+| Rule composition | partial | Nested `and`, `or`, `not`, header value, POSIX ERE regex (Linux/macOS), HMAC-SHA1/SHA256/SHA512, and IPv4 `ip-whitelist` CIDR/single-address matches work; IPv6 and Scalr signatures remain. |
 | Command arguments | partial | Literal and request-reference objects work through structured argv, never a shell; payload/complete-source forms remain. |
 | Child cwd/environment/files | partial | `command-working-directory` and per-child environment (`string`, header, raw body, method) work; query/payload/complete sources and temporary-file policy remain. |
 | Command output response | partial | Successful stdout can be returned; stderr/error and status compatibility remain. |
