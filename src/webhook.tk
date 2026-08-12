@@ -482,6 +482,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto mismatch_status = optional_status(fields, "trigger-rule-mismatch-http-response-code", 400:i32)!
             auto response_headers = optional_response_headers(fields)!
             auto methods = optional_methods(fields)!
+            auto incoming_content_type = optional_string(fields, "incoming-payload-content-type", "")!
             auto rule = parse_rule(cede required_field(fields, "trigger-rule")!)!
             auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
                                    cede string::from(""), cede string::from(""), cede string::from("value"), cede string::from(""))
@@ -494,6 +495,10 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             hook.response_headers = cede response_headers
             hook.methods = cede methods
             hook.rule = cede rule
+            if incoming_content_type.len() > 0:usize {
+                hook.required_header = string::from("incoming-payload-content-type")
+                hook.required_value = cede incoming_content_type
+            }
             return Result<Hook, string>::Ok(cede hook)
         }
         _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
@@ -816,7 +821,16 @@ fn valid_payload_signature(kind: str, secret: str, received: str, body: str) -> 
     return false
 }
 
-fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, string> {
+fn hook_content_type(hook: Hook, request: HttpRequest) -> Option<string> {
+    if hook.required_header.as_str().equals("incoming-payload-content-type") {
+        return Option<string>::Some(hook.required_value.clone())
+    }
+    auto content_type = request.headers.get("content-type")
+    if content_type.is_none() { return Option<string>::None }
+    return Option<string>::Some(content_type.unwrap())
+}
+
+fn resolve_argument(argument: Argument, hook: Hook, request: HttpRequest) -> Result<string, string> {
     if argument.source.as_str().equals("string") { return Result<string, string>::Ok(argument.name.clone()) }
     if argument.source.as_str().equals("header") {
         auto value = request.headers.get(argument.name.as_str())
@@ -827,7 +841,7 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         return query_argument(request.path.as_str(), argument.name.as_str())
     }
     if argument.source.as_str().equals("payload") {
-        auto content_type = request.headers.get("content-type")
+        auto content_type = hook_content_type(hook, request)
         if content_type.is_some() {
             auto content_type_value = content_type.unwrap()
             if content_type_value.as_str().starts_with("application/x-www-form-urlencoded") {
@@ -1155,7 +1169,7 @@ fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
     auto index# = 0:usize
     loop index < hook.args.len() {
         auto argument = hook.args.get_ref(index).clone()
-        auto value = resolve_argument(argument, request)
+        auto value = resolve_argument(argument, hook.clone(), request)
         if value.is_err() { return Result<string, string>::Err(value.unwrap_err()) }
         command#.arg(cede value.unwrap())
         index = index + 1:usize
@@ -1163,7 +1177,7 @@ fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
     index = 0:usize
     loop index < hook.environment.len() {
         auto binding = hook.environment.get_ref(index).clone()
-        auto value = resolve_argument(binding, request)
+        auto value = resolve_argument(binding, hook.clone(), request)
         if value.is_err() { return Result<string, string>::Err(value.unwrap_err()) }
         auto key# = binding.env_name.clone()
         if key.len() == 0:usize {

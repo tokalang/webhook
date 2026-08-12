@@ -232,5 +232,18 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "content-type-override",
+    "execute-command": "/usr/bin/printf",
+    "incoming-payload-content-type": "application/json",
+    "pass-arguments-to-command": ["%s", {"source": "payload", "name": "repository.name"}],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]

@@ -128,6 +128,9 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/multipart", multipart, content_type="multipart/form-data; boundary=toka-boundary")
         if status != 200 or body != b"multipart value":
             raise RuntimeError(f"multipart form response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/content-type-override", b'{"repository":{"name":"overridden"}}', content_type="text/plain")
+        if status != 200 or body != b"overridden":
+            raise RuntimeError(f"incoming content type override response was {(status, body)!r}")
     finally:
         server.terminate()
         try:
