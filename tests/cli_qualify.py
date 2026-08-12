@@ -124,6 +124,10 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/json-array", b'[{"email":"array@example.test"}]')
         if status != 200 or body != b"array@example.test":
             raise RuntimeError(f"top-level JSON array response was {(status, body)!r}")
+        multipart = b'--toka-boundary\r\nContent-Disposition: form-data; name="message"\r\n\r\nmultipart value\r\n--toka-boundary--\r\n'
+        status, body, _ = request(port, "correct-horse", "/hooks/multipart", multipart, content_type="multipart/form-data; boundary=toka-boundary")
+        if status != 200 or body != b"multipart value":
+            raise RuntimeError(f"multipart form response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

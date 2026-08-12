@@ -833,6 +833,9 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
             if content_type_value.as_str().starts_with("application/x-www-form-urlencoded") {
                 return form_argument(request.body.as_str(), argument.name.as_str())
             }
+            if content_type_value.as_str().starts_with("multipart/form-data") {
+                return multipart_argument(request.body.as_str(), content_type_value.as_str(), argument.name.as_str())
+            }
             if content_type_value.as_str().starts_with("application/xml") || content_type_value.as_str().starts_with("text/xml") {
                 return xml_argument(request.body.as_str(), argument.name.as_str())
             }
@@ -1012,6 +1015,67 @@ fn form_argument(body: str, name: str) -> Result<string, string> {
         }
         if end == body.len() { break }
         offset = end + 1:usize
+    }
+    return Result<string, string>::Err(string::from("payload field is missing"))
+}
+
+fn multipart_boundary(content_type: str) -> Result<string, string> {
+    auto marker = substring_index(content_type, "boundary=")
+    if marker.is_none() { return Result<string, string>::Err(string::from("multipart boundary is missing")) }
+    auto start = marker.unwrap() + 9:usize
+    auto end# = start
+    loop end < content_type.len() && content_type.byte_at(end) != ';' { end = end + 1:usize }
+    auto boundary# = text_slice(content_type, start, end).trim()
+    if boundary.len() >= 2:usize && boundary.byte_at(0:usize) == '"' && boundary.byte_at(boundary.len() - 1:usize) == '"' {
+        boundary = text_slice(boundary.as_str(), 1:usize, boundary.len() - 1:usize)
+    }
+    if boundary.len() == 0:usize { return Result<string, string>::Err(string::from("multipart boundary is missing")) }
+    return Result<string, string>::Ok(cede boundary)
+}
+
+fn multipart_part_name(headers: str) -> Option<string> {
+    auto marker = substring_index(headers, "name=\"")
+    if marker.is_none() { return Option<string>::None }
+    auto start = marker.unwrap() + 6:usize
+    auto end = substring_index(text_slice(headers, start, headers.len()).as_str(), "\"")
+    if end.is_none() { return Option<string>::None }
+    return Option<string>::Some(text_slice(headers, start, start + end.unwrap()))
+}
+
+fn multipart_argument(body: str, content_type: str, name: str) -> Result<string, string> {
+    auto boundary = multipart_boundary(content_type)
+    if boundary.is_err() { return Result<string, string>::Err(boundary.unwrap_err()) }
+    auto marker# = string::from("--")
+    marker#.push_str(boundary.unwrap().as_str())
+    auto offset# = 0:usize
+    loop offset < body.len() {
+        auto found = substring_index(text_slice(body, offset, body.len()).as_str(), marker.as_str())
+        if found.is_none() { break }
+        auto part_start# = offset + found.unwrap() + marker.len()
+        if part_start + 1:usize < body.len() && body.byte_at(part_start) == '-' && body.byte_at(part_start + 1:usize) == '-' { break }
+        auto boundary_end = part_start + 1:usize
+        if boundary_end >= body.len() || body.byte_at(part_start) != '\r' || body.byte_at(boundary_end) != '\n' {
+            return Result<string, string>::Err(string::from("malformed multipart boundary"))
+        }
+        part_start = part_start + 2:usize
+        auto headers_end = substring_index(text_slice(body, part_start, body.len()).as_str(), "\r\n\r\n")
+        if headers_end.is_none() { return Result<string, string>::Err(string::from("malformed multipart headers")) }
+        auto header_end = part_start + headers_end.unwrap()
+        auto content_start = header_end + 4:usize
+        auto next = substring_index(text_slice(body, content_start, body.len()).as_str(), marker.as_str())
+        if next.is_none() { return Result<string, string>::Err(string::from("malformed multipart body")) }
+        auto marker_start = content_start + next.unwrap()
+        if marker_start < 2:usize || body.byte_at(marker_start - 2:usize) != '\r' || body.byte_at(marker_start - 1:usize) != '\n' {
+            return Result<string, string>::Err(string::from("malformed multipart boundary"))
+        }
+        auto part_name = multipart_part_name(text_slice(body, part_start, header_end).as_str())
+        if part_name.is_some() {
+            auto received_name = part_name.unwrap()
+            if received_name.as_str().equals(name) {
+                return Result<string, string>::Ok(text_slice(body, content_start, marker_start - 2:usize))
+            }
+        }
+        offset = marker_start
     }
     return Result<string, string>::Err(string::from("payload field is missing"))
 }
