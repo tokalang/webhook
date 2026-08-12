@@ -618,7 +618,8 @@ fn evaluate_match(rule: HeaderRule, request: HttpRequest) -> bool {
     if actual.is_none() { return negated }
     auto matched# = false
     if kind.as_str().equals("ip-whitelist") {
-        matched = ipv4_in_ranges(actual.unwrap().as_str(), rule.secret.as_str())
+        auto host = ipv4_host(actual.unwrap().as_str())
+        if host.is_ok() { matched = ipv4_in_ranges(host.unwrap().as_str(), rule.secret.as_str()) }
     } else if kind.as_str().equals("regex") {
         matched = posix_regex_matches(rule.secret.as_str(), actual.unwrap().as_str())
     } else if !kind.as_str().equals("value") {
@@ -654,6 +655,14 @@ fn ipv4_number(text: str) -> Result<u32, string> {
     }
     if count != 4:usize { return Result<u32, string>::Err(string::from("invalid IPv4 address")) }
     return Result<u32, string>::Ok(value)
+}
+
+fn ipv4_host(text: str) -> Result<string, string> {
+    auto separator = text.index_of(':')
+    if separator.is_none() { return Result<string, string>::Ok(string::from(text)) }
+    auto at = separator.unwrap()
+    if at == 0:usize { return Result<string, string>::Err(string::from("invalid IPv4 peer address")) }
+    return Result<string, string>::Ok(text_slice(text, 0:usize, at))
 }
 
 fn ipv4_in_ranges(address: str, ranges: str) -> bool {
@@ -1341,6 +1350,10 @@ fn peer_ipv4(stream#: TcpStream) -> Option<string> {
         auto *octet1 = (*address as usize + 5:usize) as *u8
         auto *octet2 = (*address as usize + 6:usize) as *u8
         auto *octet3 = (*address as usize + 7:usize) as *u8
+        auto *port_high = (*address as usize + 2:usize) as *u8
+        auto *port_low = (*address as usize + 3:usize) as *u8
+        auto port# = port_high as i32
+        port = port * 256:i32 + port_low as i32
         auto text# = string::from_int(octet0 as i32)
         text#.push_str(".")
         text#.push_str(string::from_int(octet1 as i32).as_str())
@@ -1348,6 +1361,8 @@ fn peer_ipv4(stream#: TcpStream) -> Option<string> {
         text#.push_str(string::from_int(octet2 as i32).as_str())
         text#.push_str(".")
         text#.push_str(string::from_int(octet3 as i32).as_str())
+        text#.push_str(":")
+        text#.push_str(string::from_int(port).as_str())
         libc_free(*address as *void)
         libc_free(*length as *void)
         return Option<string>::Some(cede text)
