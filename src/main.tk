@@ -6,7 +6,7 @@ import std/env::{args_count, get_arg}
 import std/io::{println}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
 import std/task::{block_on}
-import ./webhook::{load_hooks, parse_port, serve_forever_async}
+import ./webhook::{load_hooks, parse_port, serve_file_forever_async}
 
 fn usage() {
     println("Usage: webhook --hooks <hooks.json> [--port <1-65535>]")
@@ -32,11 +32,11 @@ pub fn main() -> i32 {
         index = index + 1
     }
     if hooks_path.len() == 0:usize { usage(); return 2 }
+    auto checked = load_hooks(hooks_path.clone())
+    if checked.is_err() { println("failed to load hooks JSON"); return 1 }
 
-    auto hooks = load_hooks(hooks_path)
-    if hooks.is_err() { println("failed to load hooks JSON"); return 1 }
     auto listener# = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0:u8, 0:u8, 0:u8, 0:u8), port))
     if !listener.is_valid() { println("failed to bind listener"); return 1 }
-    auto server = serve_forever_async(cede hooks.unwrap(), cede listener, 1048576:usize, 30000:i32).start
+    auto server = serve_file_forever_async(cede hooks_path, cede listener, 1048576:usize, 30000:i32).start
     return block_on<i32>(server)
 }

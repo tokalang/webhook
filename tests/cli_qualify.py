@@ -94,6 +94,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/combined", extra={"X-Deny": "deny"})
         if status != 400 or body != b"hook trigger rule rejected request":
             raise RuntimeError(f"negated trigger rule response was {(status, body)!r}")
+        status, body, _ = request(port, "", "/hooks/regex", extra={"X-Ref": "release-42"})
+        if status != 200 or body != b"regex accepted":
+            raise RuntimeError(f"regex trigger rule response was {(status, body)!r}")
+        status, body, _ = request(port, "", "/hooks/regex", extra={"X-Ref": "main"})
+        if status != 400 or body != b"hook trigger rule rejected request":
+            raise RuntimeError(f"regex rejection response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

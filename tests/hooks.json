@@ -119,5 +119,20 @@
         {"not": {"match": {"value": "deny", "parameter": {"source": "header", "name": "X-Deny"}}}}
       ]
     }
+  },
+  {
+    "id": "regex",
+    "execute-command": "/usr/bin/true",
+    "response-message": "regex accepted",
+    "trigger-rule": {
+      "match": {
+        "type": "regex",
+        "regex": "^release-[0-9]+$",
+        "parameter": {
+          "source": "header",
+          "name": "X-Ref"
+        }
+      }
+    }
   }
 ]

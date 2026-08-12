@@ -6,7 +6,6 @@ pub const PACKAGE = (
     compiler = "1.0.0-rc.3",
     entry_modules = ("src/main.tk",),
     targets = ("macos", "linux"),
-    dependencies = (),
     native = (required = false, libraries = ())
 )
 

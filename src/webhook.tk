@@ -5,10 +5,11 @@
 
 import core/option::{Option}
 import core/result::{Result}
-import std/fs::{read_to_string}
+import std/fs::{read_to_string, write_string}
 import std/hashmap::{HashMap}
+import std/io::{remove_file}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}
-import std/process::{Command}
+import std/process::{Command, STDIO_NULL}
 import std/bytes::{Bytes}
 import std/vec::{Vec}
 import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
@@ -328,6 +329,7 @@ fn parse_match(cede node: JsonNode) -> Result<HeaderRule, string> {
             auto kind = optional_string(matching_fields, "type", "value")!
             auto expected = optional_string(matching_fields, "value", "")!
             auto secret = optional_string(matching_fields, "secret", "")!
+            auto regex = optional_string(matching_fields, "regex", "")!
             auto parameter_node = required_field(matching_fields, "parameter")!
             match cede parameter_node {
                 auto ObjectNode('parameter_fields) => {
@@ -337,15 +339,20 @@ fn parse_match(cede node: JsonNode) -> Result<HeaderRule, string> {
                         return Result<HeaderRule, string>::Err(string::from("only header trigger-rule parameters are supported"))
                     }
                     auto name = string_value(cede required_field(parameter_fields, "name")!)!
-                    if !kind.as_str().equals("value") && !kind.as_str().equals("payload-hmac-sha1") &&
+                    if !kind.as_str().equals("value") && !kind.as_str().equals("regex") && !kind.as_str().equals("payload-hmac-sha1") &&
                        !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") {
                         return Result<HeaderRule, string>::Err(string::from("unsupported trigger-rule match type"))
                     }
-                    if !kind.as_str().equals("value") && secret.len() == 0:usize {
+                    if kind.as_str().equals("regex") && regex.len() == 0:usize {
+                        return Result<HeaderRule, string>::Err(string::from("regex trigger-rule requires regex"))
+                    }
+                    if !kind.as_str().equals("value") && !kind.as_str().equals("regex") && secret.len() == 0:usize {
                         return Result<HeaderRule, string>::Err(string::from("payload signature trigger-rule requires secret"))
                     }
+                    auto stored_secret# = cede secret
+                    if kind.as_str().equals("regex") { stored_secret = cede regex }
                     return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected,
-                        kind = cede kind, secret = cede secret))
+                        kind = cede kind, secret = cede stored_secret))
                 }
                 _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule parameter must be an object"))
             }
@@ -398,14 +405,54 @@ fn parse_rule(cede node: JsonNode) -> Result<TriggerRule, string> {
             if not_node.is_some() {
                 auto rule = parse_rule(cede not_node.unwrap())
                 if rule.is_err() { return Result<TriggerRule, string>::Err(rule.unwrap_err()) }
-                auto rules# = Vec<TriggerRule>::new()
-                rules#.push(cede rule.unwrap())
-                return Result<TriggerRule, string>::Ok(TriggerRule::NotNode(cede rules))
+                return Result<TriggerRule, string>::Ok(cede negate_rule(cede rule.unwrap()))
             }
             return Result<TriggerRule, string>::Err(string::from("trigger-rule has no supported operator"))
         }
         _ => return Result<TriggerRule, string>::Err(string::from("trigger-rule must be an object"))
     }
+}
+
+fn negate_rule(cede rule: TriggerRule) -> TriggerRule {
+    match cede rule {
+        auto MatchNode('match) => {
+            auto rule_match# = cede 'match
+            if rule_match.kind.as_str().starts_with("not:") {
+                rule_match.kind = text_slice(rule_match.kind.as_str(), 4:usize, rule_match.kind.len())
+            } else {
+                auto negated# = string::from("not:")
+                negated#.push_str(rule_match.kind.as_str())
+                rule_match.kind = cede negated
+            }
+            return TriggerRule::MatchNode(cede rule_match)
+        }
+        auto AndNode('rules) => {
+            auto rules = cede 'rules
+            return TriggerRule::OrNode(cede negate_rule_list(cede rules))
+        }
+        auto OrNode('rules) => {
+            auto rules = cede 'rules
+            return TriggerRule::AndNode(cede negate_rule_list(cede rules))
+        }
+        auto NotNode('rules) => {
+            auto rules# = cede 'rules
+            if rules.len() == 1:usize {
+                auto child = rules#.remove(0:usize)
+                if child.is_some() { return child.unwrap() }
+            }
+            return TriggerRule::AndNode(cede rules)
+        }
+    }
+}
+
+fn negate_rule_list(cede input: Vec<TriggerRule>) -> Vec<TriggerRule> {
+    auto rules# = cede input
+    auto result# = Vec<TriggerRule>::new()
+    loop !rules#.is_empty() {
+        auto child = rules#.remove(0:usize)
+        if child.is_some() { result#.push(cede negate_rule(cede child.unwrap())) }
+    }
+    return result
 }
 
 fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
@@ -494,17 +541,116 @@ fn route_path(path: str) -> string {
 }
 
 fn authorized(hook: Hook, request: HttpRequest) -> bool {
-    return evaluate_rule(hook.rule, request)
+    match hook.rule {
+        auto MatchNode('rule) => return evaluate_match(cede 'rule, request)
+        auto AndNode('rules) => return evaluate_top_level_and(cede 'rules, request)
+        auto OrNode('rules) => return evaluate_top_level_or(cede 'rules, request)
+        auto NotNode('rules) => return evaluate_rule(TriggerRule::NotNode(cede 'rules), request)
+    }
+}
+
+// Avoid recursively reusing an HttpRequest for the common n-ary case.  The
+// current runtime's by-value lowering is stable for one matcher at a time.
+fn evaluate_top_level_and(cede input: Vec<TriggerRule>, request: HttpRequest) -> bool {
+    auto rules# = cede input
+    loop !rules.is_empty() {
+        auto child = rules#.remove(0:usize)
+        if child.is_none() { return false }
+        match cede child.unwrap() {
+            auto MatchNode('rule) => {
+                if !evaluate_match(cede 'rule, request) { return false }
+            }
+            auto AndNode('nested) => {
+                if !evaluate_top_level_and(cede 'nested, request) { return false }
+            }
+            auto OrNode('nested) => {
+                if !evaluate_top_level_or(cede 'nested, request) { return false }
+            }
+            auto NotNode('nested) => {
+                if !evaluate_rule(TriggerRule::NotNode(cede 'nested), request) { return false }
+            }
+        }
+    }
+    return true
+}
+
+fn evaluate_top_level_or(cede input: Vec<TriggerRule>, request: HttpRequest) -> bool {
+    auto rules# = cede input
+    loop !rules.is_empty() {
+        auto child = rules#.remove(0:usize)
+        if child.is_some() {
+            match cede child.unwrap() {
+                auto MatchNode('rule) => {
+                    if evaluate_match(cede 'rule, request) { return true }
+                }
+                auto AndNode('nested) => {
+                    if evaluate_top_level_and(cede 'nested, request) { return true }
+                }
+                auto OrNode('nested) => {
+                    if evaluate_top_level_or(cede 'nested, request) { return true }
+                }
+                auto NotNode('nested) => {
+                    if evaluate_rule(TriggerRule::NotNode(cede 'nested), request) { return true }
+                }
+            }
+        }
+    }
+    return false
 }
 
 fn evaluate_match(rule: HeaderRule, request: HttpRequest) -> bool {
     auto actual = request.headers.get(rule.name.as_str())
-    if actual.is_none() { return false }
-    if !rule.kind.as_str().equals("value") {
-        return valid_payload_signature(rule.kind.as_str(), rule.secret.as_str(),
-                                       actual.unwrap().as_str(), request.body.as_str())
+    auto kind# = rule.kind.clone()
+    auto negated# = false
+    if kind.as_str().starts_with("not:") {
+        negated = true
+        kind = text_slice(kind.as_str(), 4:usize, kind.len())
     }
-    return actual.unwrap().as_str().equals(rule.value.as_str())
+    if actual.is_none() { return negated }
+    auto matched# = false
+    if kind.as_str().equals("regex") {
+        matched = posix_regex_matches(rule.secret.as_str(), actual.unwrap().as_str())
+    } else if !kind.as_str().equals("value") {
+        matched = valid_payload_signature(kind.as_str(), rule.secret.as_str(),
+                                          actual.unwrap().as_str(), request.body.as_str())
+    } else {
+        matched = actual.unwrap().as_str().equals(rule.value.as_str())
+    }
+    if negated { return !matched }
+    return matched
+}
+
+// Toka's bundled regex package is not stable when the same rule accepts and
+// later rejects a request.  Linux and macOS provide these tools, and mktemp
+// gives the matcher an unguessable, exclusive input file without a shell.
+fn posix_regex_matches(pattern: str, value: str) -> bool {
+    auto maker# = Command::new(string::from("/usr/bin/mktemp"))
+    maker#.arg(string::from("-t"))
+    maker#.arg(string::from("toka-webhook-regex"))
+    maker#.stdin(STDIO_NULL)
+    maker#.stderr(STDIO_NULL)
+    auto created = maker#.output()
+    if created.is_err() { return false }
+    auto path = created.unwrap().stdout.trim()
+    if path.len() == 0:usize { return false }
+    auto written = write_string(path.clone(), value)
+    if written.is_err() {
+        remove_file(cede path)
+        return false
+    }
+    auto matcher# = Command::new(string::from("/usr/bin/grep"))
+    matcher#.arg(string::from("-E"))
+    matcher#.arg(string::from("-q"))
+    matcher#.arg(string::from("--"))
+    matcher#.arg(string::from(pattern))
+    matcher#.arg(path.clone())
+    matcher#.stdin(STDIO_NULL)
+    matcher#.stdout(STDIO_NULL)
+    matcher#.stderr(STDIO_NULL)
+    auto result = matcher#.try_status()
+    auto removed = remove_file(cede path)
+    if result.is_err() { return false }
+    return result.unwrap().success()
 }
 
 fn evaluate_rule(rule: TriggerRule, request: HttpRequest) -> bool {
@@ -883,6 +1029,40 @@ fn wire_bytes(wire: str) -> Vec<u8> {
     return bytes
 }
 
+// Toka's current HTTP parser aborts on a header whose value is empty.  For
+// webhook matching, an empty value has the same outcome as an absent value,
+// so omit those lines before handing the request to that parser.
+fn is_empty_header_line(line: str) -> bool {
+    auto colon = line.index_of(':')
+    if colon.is_none() { return false }
+    auto index# = colon.unwrap() + 1:usize
+    loop index < line.len() {
+        auto byte = line.byte_at(index)
+        if byte != ' ' && byte != '\t' && byte != '\r' { return false }
+        index = index + 1:usize
+    }
+    return true
+}
+
+fn omit_empty_headers(raw: str) -> string {
+    auto cleaned# = string::from("")
+    auto start# = 0:usize
+    auto in_headers# = true
+    loop start < raw.len() {
+        auto end# = start
+        loop end < raw.len() && raw.byte_at(end) != '\n' { end = end + 1:usize }
+        auto line = text_slice(raw, start, end)
+        if in_headers && line.as_str().equals("\r") { in_headers = false }
+        if !in_headers || !is_empty_header_line(line.as_str()) {
+            cleaned#.push_str(line.as_str())
+            if end < raw.len() { cleaned#.push_str("\n") }
+        }
+        if end == raw.len() { break }
+        start = end + 1:usize
+    }
+    return cleaned
+}
+
 fn write_local_response_async(stream#: TcpStream, response: HttpResponse, timeout_ms: i32) -> async Result<(), string> {
     auto wire = response_wire(response)
     auto written = stream#.write_from_async(cede wire_bytes(wire.as_str()), timeout_ms).await
@@ -916,7 +1096,7 @@ fn read_local_request_async(stream#: TcpStream, max_request_bytes: usize, timeou
             text#.push_byte_raw(received#.get(index))
             index = index + 1:usize
         }
-        auto parsed = parse_http_request_with_limit(text, max_request_bytes)
+        auto parsed = parse_http_request_with_limit(omit_empty_headers(text.as_str()), max_request_bytes)
         if parsed.is_ok() { return parsed }
         last_error = parsed.unwrap_err()
     }
@@ -942,6 +1122,38 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
         auto selected = find_hook(hooks, request.path.as_str())
         auto response# = HttpResponse::not_found()
         if selected.is_some() { response = dispatch(selected.unwrap(), request) }
+        auto _write = write_local_response_async(stream, response, timeout_ms).await
+        stream#.close()
+    }
+    return 0:i32
+}
+
+// Reloading the JSON configuration per connection keeps the parsed rule tree
+// short-lived.  This avoids the current runtime defect in deep-cloning nested
+// enum payloads while retaining deterministic per-request configuration.
+pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listener: TcpListener,
+                                max_request_bytes: usize, timeout_ms: i32) -> async i32 {
+    auto hooks_path# = cede supplied_path
+    auto listener# = cede supplied_listener
+    loop true {
+        auto stream# = listener#.accept_async().await
+        if !stream.is_valid() { continue }
+        auto received = read_local_request_async(stream, max_request_bytes, timeout_ms).await
+        if received.is_err() {
+            auto _write = write_local_response_async(stream, HttpResponse::bad_request(string::from("invalid HTTP request")), timeout_ms).await
+            stream#.close()
+            continue
+        }
+        auto request = received.unwrap()
+        auto loaded = load_hooks(hooks_path.clone())
+        auto response# = HttpResponse::not_found()
+        if loaded.is_err() {
+            response = HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),
+                                    headers = HeaderMap::new(), body = string::from("failed to load hooks JSON"))
+        } else {
+            auto selected = find_hook(loaded.unwrap(), request.path.as_str())
+            if selected.is_some() { response = dispatch(selected.unwrap(), request) }
+        }
         auto _write = write_local_response_async(stream, response, timeout_ms).await
         stream#.close()
     }
