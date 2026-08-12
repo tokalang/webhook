@@ -14,7 +14,7 @@ HTTP/process behavior on both Linux and macOS.
 | Request references | planned | Header, query, request, JSON/form/XML payload, and complete-source forms. |
 | Rule composition | planned | `and`, `or`, `not`, value, regex, IP, HMAC, Scalr signatures. |
 | Command arguments | partial | Literal arguments only; execution uses structured argv, never a shell. |
-| Child cwd/environment/files | blocked by adapter | Requires per-child process setup, not process-global mutation. |
+| Child cwd/environment/files | planned | Toka now exposes per-child cwd/environment/stdio and cancellation; webhook still needs request-reference and temporary-file policy. |
 | Command output response | planned | Must preserve stdout/stderr and non-zero status behavior. |
 | Hook response policy | planned | Response message, headers, status codes, allowed methods, mismatch code. |
 | HTTP server behavior | partial | One request per connection, serial acceptance, fixed `/hooks` prefix. |
@@ -23,13 +23,12 @@ HTTP/process behavior on both Linux and macOS.
 | systemd activation | Linux-only planned | Not applicable to macOS. |
 | PID file, uid/gid drop, logs | planned | Linux/macOS semantics only. |
 
-## Toka candidates identified during porting
+## Toka capability history
 
-1. `std/process` needs an owned, per-child specification for environment,
-   working directory, stdin/stdout/stderr policy, and cancellation. Global
-   `setenv`/`chdir` is not safe for concurrent webhook requests.
-2. `stdx/crypto` has SHA-1 and HMAC-SHA256 but no HMAC-SHA1 or HMAC-SHA512;
-   upstream signature rules require all three.
+The two initial candidates are now available in Toka: `std/process` has an
+owned per-child specification for environment, working directory, stdio, and
+cancellation; `stdx/crypto` has HMAC-SHA1, HMAC-SHA256, and HMAC-SHA512.
 
-Until those standard APIs exist, any application-local native adapter stays
-private to this repository and receives dedicated Linux/macOS lifecycle tests.
+No application-local process or cryptographic workaround is needed for these
+features. Any future native adapter remains private to this repository and
+requires dedicated Linux/macOS lifecycle tests.

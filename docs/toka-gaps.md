@@ -1,11 +1,11 @@
 # Toka capability gaps found by this port
 
-`std/process::Command` safely starts a process from a program plus an argv
-vector, which is sufficient for the first webhook execution boundary. It does
-not currently provide a per-child environment map or working directory. Using
-process-global `std/env::set_var` or `set_current_dir` would be unsafe for a
-concurrent HTTP server, so this project deliberately does not emulate those
-upstream options through global mutation.
+The original port identified a per-child process-configuration gap. That gap
+is now closed by Toka's `std/process::Command`: `current_dir`, `env`, stdio
+policy, cancel policy, `request_cancel`, and configured `output` run below the
+POSIX child boundary. This application must use those APIs rather than
+process-global `std/env::set_var` or `set_current_dir`.
 
-This repository treats the missing APIs as a Toka standard-library gap, not as
-permission to use shell concatenation or unsafe mutable process-global state.
+The historic note remains so the port's safety decision is auditable: shell
+concatenation and unsafe mutable process-global state were never acceptable
+workarounds.
