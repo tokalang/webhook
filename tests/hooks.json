@@ -70,5 +70,23 @@
         }
       }
     }
+  },
+  {
+    "id": "payload",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": [
+      {"source": "string", "name": "%s"},
+      {"source": "payload", "name": "repository.name"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
   }
 ]

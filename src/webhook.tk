@@ -362,6 +362,9 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
     if argument.source.as_str().equals("url") || argument.source.as_str().equals("query") {
         return query_argument(request.path.as_str(), argument.name.as_str())
     }
+    if argument.source.as_str().equals("payload") {
+        return payload_argument(request.body.as_str(), argument.name.as_str())
+    }
     if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
@@ -370,6 +373,76 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         if request.method == HttpMethod::DELETE { return Result<string, string>::Ok(string::from("DELETE")) }
     }
     return Result<string, string>::Err(string::from("unsupported request argument source"))
+}
+
+fn parse_array_index(text: str) -> Result<usize, string> {
+    if text.len() == 0:usize { return Result<usize, string>::Err(string::from("payload array index is empty")) }
+    auto value# = 0:usize
+    auto index# = 0:usize
+    loop index < text.len() {
+        auto byte = text.byte_at(index)
+        if byte < '0' || byte > '9' { return Result<usize, string>::Err(string::from("payload array index is invalid")) }
+        value = value * 10:usize + (byte - '0') as usize
+        index = index + 1:usize
+    }
+    return Result<usize, string>::Ok(value)
+}
+
+fn payload_scalar(cede node: JsonNode) -> Result<string, string> {
+    match cede node {
+        auto StrNode('text) => return Result<string, string>::Ok(cede 'text)
+        auto BoolNode(value) => {
+            if value { return Result<string, string>::Ok(string::from("true")) }
+            return Result<string, string>::Ok(string::from("false"))
+        }
+        auto NumNode(value) => return Result<string, string>::Ok(string::from_f64(value))
+        _ => return Result<string, string>::Err(string::from("payload reference is not a scalar"))
+    }
+}
+
+fn payload_argument(body: str, name: str) -> Result<string, string> {
+    auto node# = JsonNode::NullNode(0):JsonNode
+    auto parsed = node#.parse_json(body)
+    if parsed.is_err() { return Result<string, string>::Err(string::from("request payload is not valid JSON")) }
+    auto remaining# = string::from(name)
+    loop true {
+        match cede node {
+            auto ObjectNode('fields) => {
+                auto fields# = cede 'fields
+                auto exact = fields#.remove(remaining.clone())
+                if exact.is_some() { return payload_scalar(cede exact.unwrap()) }
+                auto dot = remaining.as_str().index_of('.')
+                if dot.is_none() { return Result<string, string>::Err(string::from("payload field is missing")) }
+                auto split_at = dot.unwrap()
+                auto key = text_slice(remaining.as_str(), 0:usize, split_at)
+                auto next = fields#.remove(key)
+                if next.is_none() { return Result<string, string>::Err(string::from("payload field is missing")) }
+                remaining = text_slice(remaining.as_str(), split_at + 1:usize, remaining.len())
+                node = next.unwrap()
+            }
+            auto ArrayNode('items) => {
+                auto items# = cede 'items
+                auto dot = remaining.as_str().index_of('.')
+                if dot.is_none() {
+                    auto index = parse_array_index(remaining.as_str())
+                    if index.is_err() { return Result<string, string>::Err(string::from("payload array item is missing")) }
+                    auto next = items#.remove(index.unwrap())
+                    if next.is_none() { return Result<string, string>::Err(string::from("payload array item is missing")) }
+                    return payload_scalar(cede next.unwrap())
+                }
+                auto split_at = dot.unwrap()
+                auto part = text_slice(remaining.as_str(), 0:usize, split_at)
+                auto index = parse_array_index(part.as_str())
+                if index.is_err() { return Result<string, string>::Err(string::from("payload array item is missing")) }
+                auto next = items#.remove(index.unwrap())
+                if next.is_none() { return Result<string, string>::Err(string::from("payload array item is missing")) }
+                remaining = text_slice(remaining.as_str(), split_at + 1:usize, remaining.len())
+                node = next.unwrap()
+            }
+            _ => return Result<string, string>::Err(string::from("payload path traverses a scalar"))
+        }
+    }
+    return Result<string, string>::Err(string::from("payload path is invalid"))
 }
 
 fn query_argument(path: str, name: str) -> Result<string, string> {

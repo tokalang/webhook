@@ -26,6 +26,7 @@ def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
         headers["X-Trace"] = trace
+    headers["Content-Type"] = "application/json"
     connection.request("POST", path, body=body, headers=headers)
     response = connection.getresponse()
     body = response.read()
@@ -73,6 +74,9 @@ def main() -> int:
         status, body = request(port, "correct-horse", "/hooks/references", b"raw-body", "trace")
         if status != 200 or body != b"trace|raw-body|POST":
             raise RuntimeError(f"header/body/method command argument response was {(status, body)!r}")
+        status, body = request(port, "correct-horse", "/hooks/payload", b'{"repository":{"name":"toka"}}')
+        if status != 200 or body != b"toka":
+            raise RuntimeError(f"JSON payload command argument response was {(status, body)!r}")
     finally:
         server.terminate()
         try:
