@@ -17,7 +17,7 @@ HTTP/process behavior on both Linux and macOS.
 | Child cwd/environment/files | partial | `command-working-directory` and per-child environment (`string`, header, raw body, method) work; query/payload/complete sources and temporary-file policy remain. |
 | Command output response | partial | Successful stdout can be returned; stderr/error and status compatibility remain. |
 | Hook response policy | partial | `response-message`, response headers, success status, mismatch status, and `http-methods` for GET/POST/PUT/DELETE work. |
-| HTTP server behavior | partial | One request per connection, serial acceptance, fixed `/hooks` prefix. |
+| HTTP server behavior | partial | One request per connection, serial acceptance, fixed `/hooks` prefix, and repeatable global `--header name=value` response headers (including CORS). |
 | TLS, ciphers, Unix socket | planned | TLS can use existing Toka TLS layer; Unix socket needs a platform adapter. |
 | Configuration reload and signals | planned | HUP/USR1 on Linux/macOS. |
 | systemd activation | Linux-only planned | Not applicable to macOS. |

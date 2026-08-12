@@ -21,7 +21,7 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None, content_type: str = "application/json") -> tuple[int, bytes, str | None]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None, content_type: str = "application/json", response_header: str = "X-Webhook-Response") -> tuple[int, bytes, str | None]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
@@ -31,7 +31,7 @@ def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b
     headers["Content-Type"] = content_type
     connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
-    configured_header = response.getheader("X-Webhook-Response")
+    configured_header = response.getheader(response_header)
     body = response.read()
     connection.close()
     return response.status, body, configured_header
@@ -46,7 +46,7 @@ def main() -> int:
 
     port = free_port()
     server = subprocess.Popen(
-        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port)],
+        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -67,6 +67,9 @@ def main() -> int:
             raise RuntimeError(f"authorized webhook response was {(status, body)!r}")
         if configured_header != "configured":
             raise RuntimeError(f"configured response header was {configured_header!r}")
+        _, _, cors_header = request(port, "correct-horse", response_header="Access-Control-Allow-Origin")
+        if cors_header != "*":
+            raise RuntimeError(f"global CORS header was {cors_header!r}")
         status, body, _ = request(port, "wrong")
         if status != 403 or body != b"hook trigger rule rejected request":
             raise RuntimeError(f"unauthorized webhook response was {(status, body)!r}")

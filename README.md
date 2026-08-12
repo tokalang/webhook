@@ -15,12 +15,13 @@ command. The first version runs only literal, configuration-owned arguments.
 ## Run
 
 ```sh
-webhook --hooks hooks.json --port 9000
+webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'
 ```
 
 The configuration is a JSON array using upstream's `id`, `execute-command`,
 `pass-arguments-to-command`, and value/header `trigger-rule.match` keys.
-Only literal argument strings are accepted. The server handles one request per
+The optional repeatable `--header name=value` flag adds a response header to
+every result (including CORS headers). The server handles one request per
 connection and one connection at a time in this initial implementation.
 
 ## Current scope

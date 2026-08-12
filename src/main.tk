@@ -6,15 +6,17 @@ import std/env::{args_count, get_arg}
 import std/io::{println}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
 import std/task::{block_on}
-import ./webhook::{load_hooks, parse_port, serve_file_forever_async}
+import std/vec::{Vec}
+import ./webhook::{ResponseHeader, load_hooks, parse_global_header, parse_port, serve_file_forever_async}
 
 fn usage() {
-    println("Usage: webhook --hooks <hooks.json> [--port <1-65535>]")
+    println("Usage: webhook --hooks <hooks.json> [--port <1-65535>] [--header name=value]")
 }
 
 pub fn main() -> i32 {
     auto hooks_path# = string::from("")
     auto port# = 9000:u16
+    auto headers# = Vec<ResponseHeader>::new()
     auto index# = 1:i32
     loop index < args_count() {
         auto argument = get_arg(index)
@@ -28,6 +30,12 @@ pub fn main() -> i32 {
             auto parsed = parse_port(get_arg(index).as_str())
             if parsed.is_err() { println("invalid --port"); return 2 }
             port = parsed.unwrap()
+        } else if argument.as_str().equals("--header") {
+            index = index + 1
+            if index >= args_count() { usage(); return 2 }
+            auto parsed = parse_global_header(get_arg(index).as_str())
+            if parsed.is_err() { println("invalid header"); return 2 }
+            headers#.push(cede parsed.unwrap())
         } else { usage(); return 2 }
         index = index + 1
     }
@@ -37,6 +45,6 @@ pub fn main() -> i32 {
 
     auto listener# = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0:u8, 0:u8, 0:u8, 0:u8), port))
     if !listener.is_valid() { println("failed to bind listener"); return 1 }
-    auto server = serve_file_forever_async(cede hooks_path, cede listener, 1048576:usize, 30000:i32).start
+    auto server = serve_file_forever_async(cede hooks_path, cede listener, cede headers, 1048576:usize, 30000:i32).start
     return block_on<i32>(server)
 }

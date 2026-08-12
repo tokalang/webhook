@@ -1027,6 +1027,32 @@ fn configured_headers(hook: Hook) -> HeaderMap {
     return headers
 }
 
+pub fn parse_global_header(spec: str) -> Result<ResponseHeader, string> {
+    auto equals = spec.index_of('=')
+    match equals {
+        auto Option<usize>::Some(split_at) => {
+            if split_at == 0:usize { return Result<ResponseHeader, string>::Err(string::from("header must use name=value")) }
+            auto name = text_slice(spec, 0:usize, split_at)
+            auto value = text_slice(spec, split_at + 1:usize, spec.len())
+            auto probe# = HeaderMap::new()
+            if probe#.insert(name.clone(), value.clone()).is_err() {
+                return Result<ResponseHeader, string>::Err(string::from("header is invalid"))
+            }
+            return Result<ResponseHeader, string>::Ok(ResponseHeader(name = cede name, value = cede value))
+        }
+        _ => return Result<ResponseHeader, string>::Err(string::from("header must use name=value"))
+    }
+}
+
+fn apply_global_headers(response#: HttpResponse, global: Vec<ResponseHeader>) {
+    auto index# = 0:usize
+    loop index < global.len() {
+        auto header = global.get_ref(index).clone()
+        auto _inserted = response.headers#.insert(cede header.name, cede header.value)
+        index = index + 1:usize
+    }
+}
+
 fn method_text(method: HttpMethod) -> string {
     if method == HttpMethod::GET { return string::from("GET") }
     if method == HttpMethod::POST { return string::from("POST") }
@@ -1258,9 +1284,11 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
 // short-lived.  This avoids the current runtime defect in deep-cloning nested
 // enum payloads while retaining deterministic per-request configuration.
 pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listener: TcpListener,
+                                cede supplied_headers: Vec<ResponseHeader>,
                                 max_request_bytes: usize, timeout_ms: i32) -> async i32 {
     auto hooks_path# = cede supplied_path
     auto listener# = cede supplied_listener
+    auto global_headers# = cede supplied_headers
     loop true {
         auto stream# = listener#.accept_async().await
         if !stream.is_valid() { continue }
@@ -1280,6 +1308,7 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
             auto selected = find_hook(loaded.unwrap(), request.path.as_str())
             if selected.is_some() { response = dispatch(selected.unwrap(), request) }
         }
+        apply_global_headers(response, global_headers)
         auto _write = write_local_response_async(stream, response, timeout_ms).await
         stream#.close()
     }
