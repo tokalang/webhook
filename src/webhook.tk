@@ -349,7 +349,9 @@ fn parse_match(cede node: JsonNode) -> Result<HeaderRule, string> {
                     }
                     auto name = string_value(cede required_field(parameter_fields, "name")!)!
                     if !kind.as_str().equals("value") && !kind.as_str().equals("regex") && !kind.as_str().equals("payload-hmac-sha1") &&
-                       !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") {
+                       !kind.as_str().equals("payload-hmac-sha256") && !kind.as_str().equals("payload-hmac-sha512") &&
+                       !kind.as_str().equals("payload-hash-sha1") && !kind.as_str().equals("payload-hash-sha256") &&
+                       !kind.as_str().equals("payload-hash-sha512") {
                         return Result<HeaderRule, string>::Err(string::from("unsupported trigger-rule match type"))
                     }
                     if kind.as_str().equals("regex") && regex.len() == 0:usize {
@@ -787,9 +789,9 @@ fn bytes_from_text(text: str) -> Bytes {
 
 fn valid_payload_signature(kind: str, secret: str, received: str, body: str) -> bool {
     auto prefix# = "sha1="
-    if kind.equals("payload-hmac-sha256") { prefix = "sha256=" }
-    else if kind.equals("payload-hmac-sha512") { prefix = "sha512=" }
-    else if !kind.equals("payload-hmac-sha1") { return false }
+    if kind.equals("payload-hmac-sha256") || kind.equals("payload-hash-sha256") { prefix = "sha256=" }
+    else if kind.equals("payload-hmac-sha512") || kind.equals("payload-hash-sha512") { prefix = "sha512=" }
+    else if !kind.equals("payload-hmac-sha1") && !kind.equals("payload-hash-sha1") { return false }
 
     auto source = string::from(received)
     auto candidates# = source.split(',' as i32)
@@ -802,9 +804,12 @@ fn valid_payload_signature(kind: str, secret: str, received: str, body: str) -> 
                 auto expected = Bytes::from_vec(cede decoded.unwrap())
                 auto key = bytes_from_text(secret)
                 auto payload = bytes_from_text(body)
-                if kind.equals("payload-hmac-sha1") && hmac_sha1_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
-                if kind.equals("payload-hmac-sha256") && hmac_sha256_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
-                if kind.equals("payload-hmac-sha512") && hmac_sha512_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+                auto sha1_kind = kind.equals("payload-hmac-sha1") || kind.equals("payload-hash-sha1")
+                auto sha256_kind = kind.equals("payload-hmac-sha256") || kind.equals("payload-hash-sha256")
+                auto sha512_kind = kind.equals("payload-hmac-sha512") || kind.equals("payload-hash-sha512")
+                if sha1_kind && hmac_sha1_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+                if sha256_kind && hmac_sha256_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
+                if sha512_kind && hmac_sha512_verify(key.as_slice(), payload.as_slice(), expected.as_slice()) { return true }
             }
         }
     }

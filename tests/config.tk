@@ -48,5 +48,8 @@ fn main() -> i32 {
 
     auto ip_rule = parse_hooks("[{\"id\":\"local\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"type\":\"ip-whitelist\",\"ip-range\":\"127.0.0.0/8\"}}}]")
     assert(ip_rule.is_ok(), "IPv4 whitelist configuration parses")
+
+    auto deprecated_signature = parse_hooks("[{\"id\":\"legacy\",\"execute-command\":\"/usr/bin/true\",\"trigger-rule\":{\"match\":{\"type\":\"payload-hash-sha256\",\"secret\":\"secret\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Signature\"}}}}]")
+    assert(deprecated_signature.is_ok(), "deprecated payload hash signature configuration parses")
     return 0
 }
