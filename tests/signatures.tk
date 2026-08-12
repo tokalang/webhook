@@ -1,4 +1,4 @@
-import webhook::{Hook, dispatch}
+import webhook::{Argument, Hook, dispatch}
 import std/vec::{Vec}
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest}
 
@@ -11,7 +11,7 @@ fn request(signature: str, body: str) -> HttpRequest {
 }
 
 fn hook(kind: str) -> Hook {
-    auto args# = Vec<string>::new()
+    auto args# = Vec<Argument>::new()
     return Hook::new(cede string::from("deploy"), cede string::from("/usr/bin/true"), cede args,
         cede string::from(""), cede string::from("X-Signature"), cede string::from(""),
         cede string::from(kind), cede string::from("secret"))

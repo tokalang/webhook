@@ -14,12 +14,13 @@ import std/vec::{Vec}
 import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
 import stdx/encoding/hex
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, HttpServer}
+import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode}
 
 pub shape Hook (
     id: string,
     command: string,
-    args: Vec<string>,
+    args: Vec<Argument>,
     working_dir: string,
     required_header: string,
     required_value: string,
@@ -51,7 +52,7 @@ shape HeaderRule (
 )
 
 impl Hook {
-    pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
+    pub fn new(cede id: string, cede command: string, cede args: Vec<Argument>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
         auto environment# = Vec<Argument>::new()
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value,
@@ -61,13 +62,19 @@ impl Hook {
     }
 
     pub fn clone(self) -> Hook {
+        auto args# = Vec<Argument>::new()
+        auto arg_index# = 0:usize
+        loop arg_index < self.args.len() {
+            args#.push(cede self.args.get_ref(arg_index).clone())
+            arg_index = arg_index + 1:usize
+        }
         auto environment# = Vec<Argument>::new()
         auto index# = 0:usize
         loop index < self.environment.len() {
             environment#.push(cede self.environment.get_ref(index).clone())
             index = index + 1:usize
         }
-        return Hook(id = self.id.clone(), command = self.command.clone(), args = self.args.clone(),
+        return Hook(id = self.id.clone(), command = self.command.clone(), args = cede args,
                     working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
                     required_value = self.required_value.clone(), rule_kind = self.rule_kind.clone(),
                     rule_secret = self.rule_secret.clone(), environment = cede environment,
@@ -110,19 +117,36 @@ fn optional_bool(fields#: HashMap<string, JsonNode>, key: str, fallback: bool) -
     return bool_value(cede found.unwrap())
 }
 
+fn parse_argument_fields(fields#: HashMap<string, JsonNode>) -> Result<Argument, string> {
+    auto source = optional_string(fields, "source", "string")!
+    auto name = optional_string(fields, "name", "")!
+    auto env_name = optional_string(fields, "envname", "")!
+    if name.len() == 0:usize && !source.as_str().equals("raw-request-body") &&
+       !source.as_str().equals("entire-payload") && !source.as_str().equals("entire-query") &&
+       !source.as_str().equals("entire-headers") {
+        return Result<Argument, string>::Err(string::from("argument source requires name"))
+    }
+    return Result<Argument, string>::Ok(Argument(source = cede source, name = cede name, env_name = cede env_name))
+}
+
 fn parse_argument(cede node: JsonNode) -> Result<Argument, string> {
     match cede node {
         auto ObjectNode('fields) => {
             auto fields# = cede 'fields
-            auto source = optional_string(fields, "source", "string")!
-            auto name = optional_string(fields, "name", "")!
-            auto env_name = optional_string(fields, "envname", "")!
-            if name.len() == 0:usize && !source.as_str().equals("raw-request-body") {
-                return Result<Argument, string>::Err(string::from("argument source requires name"))
-            }
-            return Result<Argument, string>::Ok(Argument(source = cede source, name = cede name, env_name = cede env_name))
+            return parse_argument_fields(fields)
         }
         _ => return Result<Argument, string>::Err(string::from("command environment entry must be an object"))
+    }
+}
+
+fn parse_command_argument(cede node: JsonNode) -> Result<Argument, string> {
+    match cede node {
+        auto StrNode('text) => return Result<Argument, string>::Ok(Argument(source = string::from("string"), name = cede 'text, env_name = string::from("")))
+        auto ObjectNode('fields) => {
+            auto fields# = cede 'fields
+            return parse_argument_fields(fields)
+        }
+        _ => return Result<Argument, string>::Err(string::from("command argument must be a string or object"))
     }
 }
 
@@ -146,23 +170,23 @@ fn optional_environment(fields#: HashMap<string, JsonNode>) -> Result<Vec<Argume
     }
 }
 
-fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, string> {
+fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<Argument>, string> {
     auto found = fields#.remove(string::from("pass-arguments-to-command"))
-    auto args# = Vec<string>::new()
-    if found.is_none() { return Result<Vec<string>, string>::Ok(cede args) }
+    auto args# = Vec<Argument>::new()
+    if found.is_none() { return Result<Vec<Argument>, string>::Ok(cede args) }
     match cede found.unwrap() {
         auto ArrayNode('items) => {
             auto items# = cede 'items
             loop !items.is_empty() {
                 auto item = items#.remove(0:usize)
-                if item.is_none() { return Result<Vec<string>, string>::Err(string::from("arguments array changed during parse")) }
-                auto text = string_value(cede item.unwrap())
-                if text.is_err() { return Result<Vec<string>, string>::Err(text.unwrap_err()) }
-                args#.push(cede text.unwrap())
+                if item.is_none() { return Result<Vec<Argument>, string>::Err(string::from("arguments array changed during parse")) }
+                auto parsed = parse_command_argument(cede item.unwrap())
+                if parsed.is_err() { return Result<Vec<Argument>, string>::Err(parsed.unwrap_err()) }
+                args#.push(cede parsed.unwrap())
             }
-            return Result<Vec<string>, string>::Ok(cede args)
+            return Result<Vec<Argument>, string>::Ok(cede args)
         }
-        _ => return Result<Vec<string>, string>::Err(string::from("pass-arguments-to-command must be a JSON array"))
+        _ => return Result<Vec<Argument>, string>::Err(string::from("pass-arguments-to-command must be a JSON array"))
     }
 }
 
@@ -266,6 +290,22 @@ fn expected_path(hook: Hook) -> string {
     return value
 }
 
+fn text_slice(source: str, start: usize, end: usize) -> string {
+    auto value# = string::from("")
+    auto index# = start
+    loop index < end {
+        value#.push_char(source.byte_at(index) as char)
+        index = index + 1:usize
+    }
+    return value
+}
+
+fn route_path(path: str) -> string {
+    auto query = path.index_of('?')
+    if query.is_none() { return string::from(path) }
+    return text_slice(path, 0:usize, query.unwrap())
+}
+
 fn authorized(hook: Hook, request: HttpRequest) -> bool {
     auto actual = request.headers.get(hook.required_header.as_str())
     if actual.is_none() { return false }
@@ -319,6 +359,9 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         if value.is_none() { return Result<string, string>::Err(string::from("required request header is missing")) }
         return Result<string, string>::Ok(value.unwrap())
     }
+    if argument.source.as_str().equals("url") || argument.source.as_str().equals("query") {
+        return query_argument(request.path.as_str(), argument.name.as_str())
+    }
     if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
@@ -329,11 +372,48 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
     return Result<string, string>::Err(string::from("unsupported request argument source"))
 }
 
+fn query_argument(path: str, name: str) -> Result<string, string> {
+    auto marker = path.index_of('?')
+    if marker.is_none() { return Result<string, string>::Err(string::from("required URL query value is missing")) }
+    auto query = text_slice(path, marker.unwrap() + 1:usize, path.len())
+    auto offset# = 0:usize
+    loop offset <= query.len() {
+        auto end# = offset
+        loop end < query.len() && query.byte_at(end) != '&' { end = end + 1:usize }
+        auto piece = text_slice(query.as_str(), offset, end)
+        auto equals = piece.as_str().index_of('=')
+        auto raw_key# = piece.clone()
+        auto raw_value# = string::from("")
+        if equals.is_some() {
+            auto split_at = equals.unwrap()
+            raw_key = text_slice(piece.as_str(), 0:usize, split_at)
+            raw_value = text_slice(piece.as_str(), split_at + 1:usize, piece.len())
+        }
+        auto key = query_decode(cede raw_key)
+        if key.is_err() { return Result<string, string>::Err(string::from("invalid URL query encoding")) }
+        if key.unwrap().as_str().equals(name) {
+            auto value = query_decode(cede raw_value)
+            if value.is_err() { return Result<string, string>::Err(string::from("invalid URL query encoding")) }
+            return Result<string, string>::Ok(value.unwrap())
+        }
+        if end == query.len() { break }
+        offset = end + 1:usize
+    }
+    return Result<string, string>::Err(string::from("required URL query value is missing"))
+}
+
 fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
     auto command# = Command::new(hook.command.clone())
-    command#.args(hook.args.clone())
     if hook.working_dir.len() > 0:usize { command#.current_dir(hook.working_dir.clone()) }
     auto index# = 0:usize
+    loop index < hook.args.len() {
+        auto argument = hook.args.get_ref(index).clone()
+        auto value = resolve_argument(argument, request)
+        if value.is_err() { return Result<string, string>::Err(value.unwrap_err()) }
+        command#.arg(cede value.unwrap())
+        index = index + 1:usize
+    }
+    index = 0:usize
     loop index < hook.environment.len() {
         auto binding = hook.environment.get_ref(index).clone()
         auto value = resolve_argument(binding, request)
@@ -369,7 +449,8 @@ fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
 // only configuration-owned argv strings. Request values never enter a shell.
 pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
     if request.method != HttpMethod::POST { return HttpResponse::not_found() }
-    if !request.path.as_str().equals(expected_path(hook).as_str()) {
+    auto request_path = route_path(request.path.as_str())
+    if !request_path.as_str().equals(expected_path(hook).as_str()) {
         return HttpResponse::not_found()
     }
     if !authorized(hook, request) { return HttpResponse::bad_request(string::from("hook trigger rule rejected request")) }
@@ -384,10 +465,11 @@ pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
 }
 
 fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
+    auto route = route_path(path)
     auto index# = 0:usize
     loop index < hooks.len() {
         auto candidate = hooks.get_ref(index).clone()
-        if expected_path(candidate).as_str().equals(path) { return Option<Hook>::Some(cede candidate) }
+        if expected_path(candidate).as_str().equals(route.as_str()) { return Option<Hook>::Some(cede candidate) }
         index = index + 1:usize
     }
     return Option<Hook>::None

@@ -32,5 +32,43 @@
         }
       }
     }
+  },
+  {
+    "id": "query",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": [
+      {"source": "string", "name": "%s"},
+      {"source": "url", "name": "message"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
+  },
+  {
+    "id": "references",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": [
+      {"source": "string", "name": "%s|%s|%s"},
+      {"source": "header", "name": "X-Trace"},
+      {"source": "raw-request-body"},
+      {"source": "request", "name": "method"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
   }
 ]

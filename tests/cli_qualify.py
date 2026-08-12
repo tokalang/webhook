@@ -21,9 +21,12 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def request(port: int, secret: str, path: str = "/hooks/deploy") -> tuple[int, bytes]:
+def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None) -> tuple[int, bytes]:
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
-    connection.request("POST", path, body=b"{}", headers={"X-Hook-Secret": secret})
+    headers = {"X-Hook-Secret": secret}
+    if trace is not None:
+        headers["X-Trace"] = trace
+    connection.request("POST", path, body=body, headers=headers)
     response = connection.getresponse()
     body = response.read()
     connection.close()
@@ -64,6 +67,12 @@ def main() -> int:
         status, body = request(port, "correct-horse", "/hooks/env")
         if status != 200 or body != b"webhook\n":
             raise RuntimeError(f"per-child environment response was {(status, body)!r}")
+        status, body = request(port, "correct-horse", "/hooks/query?message=hello+query")
+        if status != 200 or body != b"hello query":
+            raise RuntimeError(f"URL query command argument response was {(status, body)!r}")
+        status, body = request(port, "correct-horse", "/hooks/references", b"raw-body", "trace")
+        if status != 200 or body != b"trace|raw-body|POST":
+            raise RuntimeError(f"header/body/method command argument response was {(status, body)!r}")
     finally:
         server.terminate()
         try:
