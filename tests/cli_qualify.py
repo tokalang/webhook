@@ -13,6 +13,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKA = ROOT.parent / "toka"
+PREFIX = "callbacks"
 
 
 def free_port() -> int:
@@ -22,6 +23,7 @@ def free_port() -> int:
 
 
 def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b"{}", trace: str | None = None, method: str = "POST", extra: dict[str, str] | None = None, content_type: str = "application/json", response_header: str = "X-Webhook-Response") -> tuple[int, bytes, str | None]:
+    path = path.replace("/hooks/", f"/{PREFIX}/", 1)
     connection = HTTPConnection("127.0.0.1", port, timeout=1)
     headers = {"X-Hook-Secret": secret}
     if trace is not None:
@@ -46,7 +48,7 @@ def main() -> int:
 
     port = free_port()
     server = subprocess.Popen(
-        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST"],
+        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST", "--urlprefix", PREFIX],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

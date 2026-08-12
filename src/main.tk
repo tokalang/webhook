@@ -10,7 +10,7 @@ import std/vec::{Vec}
 import ./webhook::{ResponseHeader, load_hooks, parse_default_methods, parse_global_header, parse_port, serve_file_forever_async}
 
 fn usage() {
-    println("Usage: webhook --hooks <hooks.json> [--port <1-65535>] [--header name=value] [--http-methods GET,POST]")
+    println("Usage: webhook --hooks <hooks.json> [--port <1-65535>] [--header name=value] [--http-methods GET,POST] [--urlprefix hooks]")
 }
 
 pub fn main() -> i32 {
@@ -18,6 +18,7 @@ pub fn main() -> i32 {
     auto port# = 9000:u16
     auto headers# = Vec<ResponseHeader>::new()
     auto default_methods# = Vec<string>::new()
+    auto url_prefix# = string::from("hooks")
     auto index# = 1:i32
     loop index < args_count() {
         auto argument = get_arg(index)
@@ -43,6 +44,10 @@ pub fn main() -> i32 {
             auto parsed = parse_default_methods(get_arg(index).as_str())
             if parsed.is_err() { println("invalid --http-methods"); return 2 }
             default_methods = cede parsed.unwrap()
+        } else if argument.as_str().equals("--urlprefix") {
+            index = index + 1
+            if index >= args_count() { usage(); return 2 }
+            url_prefix = get_arg(index)
         } else { usage(); return 2 }
         index = index + 1
     }
@@ -52,6 +57,6 @@ pub fn main() -> i32 {
 
     auto listener# = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0:u8, 0:u8, 0:u8, 0:u8), port))
     if !listener.is_valid() { println("failed to bind listener"); return 1 }
-    auto server = serve_file_forever_async(cede hooks_path, cede listener, cede headers, cede default_methods, 1048576:usize, 30000:i32).start
+    auto server = serve_file_forever_async(cede hooks_path, cede listener, cede headers, cede default_methods, cede url_prefix, 1048576:usize, 30000:i32).start
     return block_on<i32>(server)
 }

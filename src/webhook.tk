@@ -546,7 +546,15 @@ pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
 }
 
 fn expected_path(hook: Hook) -> string {
-    auto value# = string::from("/hooks/")
+    return expected_path_at_prefix(hook, "hooks")
+}
+
+fn expected_path_at_prefix(hook: Hook, prefix: str) -> string {
+    auto value# = string::from("/")
+    if prefix.len() > 0:usize {
+        value#.push_str(prefix)
+        value#.push_str("/")
+    }
     value#.push_str(hook.id.as_str())
     return value
 }
@@ -1279,12 +1287,13 @@ fn accepts_method(hook: Hook, method: HttpMethod, headers: HeaderMap) -> bool {
     return false
 }
 
-pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
+fn dispatch_at_prefix(hook: Hook, request: HttpRequest, prefix: str, defaults: Vec<string>) -> HttpResponse {
     auto request_path = route_path(request.path.as_str())
-    if !request_path.as_str().equals(expected_path(hook).as_str()) {
+    if !request_path.as_str().equals(expected_path_at_prefix(hook, prefix).as_str()) {
         return HttpResponse::not_found()
     }
-    if !accepts_method(hook, request.method, request.headers.clone()) {
+    if !accepts_method(hook, request.method, request.headers.clone()) ||
+       (hook.methods.len() == 0:usize && !default_methods_allow(defaults, request.method, request.headers.clone())) {
         return HttpResponse(status_code = 405:i32, content_type = string::from("text/plain"),
                             headers = configured_headers(hook), body = string::from(""))
     }
@@ -1304,6 +1313,11 @@ pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
                         headers = cede headers, body = result.unwrap())
 }
 
+pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
+    auto defaults# = Vec<string>::new()
+    return dispatch_at_prefix(hook, request, "hooks", cede defaults)
+}
+
 fn default_methods_allow(defaults: Vec<string>, method: HttpMethod, headers: HeaderMap) -> bool {
     if defaults.len() == 0:usize { return true }
     auto actual = request_method(method, headers)
@@ -1316,20 +1330,16 @@ fn default_methods_allow(defaults: Vec<string>, method: HttpMethod, headers: Hea
     return false
 }
 
-fn dispatch_with_default_methods(hook: Hook, request: HttpRequest, defaults: Vec<string>) -> HttpResponse {
-    if hook.methods.len() == 0:usize && !default_methods_allow(defaults, request.method, request.headers.clone()) {
-        return HttpResponse(status_code = 405:i32, content_type = string::from("text/plain"),
-                            headers = configured_headers(hook), body = string::from(""))
-    }
-    return dispatch(hook, request)
+fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
+    return find_hook_at_prefix(hooks, path, "hooks")
 }
 
-fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
+fn find_hook_at_prefix(hooks: Vec<Hook>, path: str, prefix: str) -> Option<Hook> {
     auto route = route_path(path)
     auto index# = 0:usize
     loop index < hooks.len() {
         auto candidate = hooks.get_ref(index).clone()
-        if expected_path(candidate).as_str().equals(route.as_str()) { return Option<Hook>::Some(cede candidate) }
+        if expected_path_at_prefix(candidate, prefix).as_str().equals(route.as_str()) { return Option<Hook>::Some(cede candidate) }
         index = index + 1:usize
     }
     return Option<Hook>::None
@@ -1578,11 +1588,13 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
 pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listener: TcpListener,
                                 cede supplied_headers: Vec<ResponseHeader>,
                                 cede supplied_default_methods: Vec<string>,
+                                cede supplied_url_prefix: string,
                                 max_request_bytes: usize, timeout_ms: i32) -> async i32 {
     auto hooks_path# = cede supplied_path
     auto listener# = cede supplied_listener
     auto global_headers# = cede supplied_headers
     auto default_methods# = cede supplied_default_methods
+    auto url_prefix# = cede supplied_url_prefix
     loop true {
         auto stream# = listener#.accept_async().await
         if !stream.is_valid() { continue }
@@ -1599,8 +1611,8 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
             response = HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),
                                     headers = HeaderMap::new(), body = string::from("failed to load hooks JSON"))
         } else {
-            auto selected = find_hook(loaded.unwrap(), request.path.as_str())
-            if selected.is_some() { response = dispatch_with_default_methods(selected.unwrap(), request, default_methods.clone()) }
+            auto selected = find_hook_at_prefix(loaded.unwrap(), request.path.as_str(), url_prefix.as_str())
+            if selected.is_some() { response = dispatch_at_prefix(selected.unwrap(), request, url_prefix.as_str(), default_methods.clone()) }
         }
         apply_global_headers(response, global_headers)
         auto _write = write_local_response_async(stream, response, timeout_ms).await
