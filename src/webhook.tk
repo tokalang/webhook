@@ -16,7 +16,7 @@ import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_veri
 import stdx/encoding/hex
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit}
 import stdx/net/url::{query_decode}
-import stdx/serde/json::{JsonNode}
+import stdx/serde/json::{JsonNode, write_escaped_json_string}
 
 pub shape Hook (
     id: string,
@@ -741,6 +741,7 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         if marker.is_none() { return Result<string, string>::Ok(string::from("")) }
         return Result<string, string>::Ok(text_slice(request.path.as_str(), marker.unwrap() + 1:usize, request.path.len()))
     }
+    if argument.source.as_str().equals("entire-headers") { return Result<string, string>::Ok(headers_json(request.headers)) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
         if request.method == HttpMethod::POST { return Result<string, string>::Ok(string::from("POST")) }
@@ -748,6 +749,21 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
         if request.method == HttpMethod::DELETE { return Result<string, string>::Ok(string::from("DELETE")) }
     }
     return Result<string, string>::Err(string::from("unsupported request argument source"))
+}
+
+fn headers_json(headers: HeaderMap) -> string {
+    auto text# = string::from("{")
+    auto index# = 0:usize
+    loop index < headers.entries.len() {
+        if index > 0:usize { text#.push_str(",") }
+        auto entry = headers.entries.get_ref(index).clone()
+        write_escaped_json_string(entry.key.as_str(), text)
+        text#.push_str(":")
+        write_escaped_json_string(entry.value.as_str(), text)
+        index = index + 1:usize
+    }
+    text#.push_str("}")
+    return text
 }
 
 fn parse_array_index(text: str) -> Result<usize, string> {

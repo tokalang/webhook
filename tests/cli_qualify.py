@@ -100,6 +100,9 @@ def main() -> int:
         status, body, _ = request(port, "", "/hooks/regex", extra={"X-Ref": "main"})
         if status != 400 or body != b"hook trigger rule rejected request":
             raise RuntimeError(f"regex rejection response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/headers")
+        if status != 200 or b'"x-hook-secret":"correct-horse"' not in body:
+            raise RuntimeError(f"complete header response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

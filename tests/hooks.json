@@ -134,5 +134,20 @@
         }
       }
     }
+  },
+  {
+    "id": "headers",
+    "execute-command": "/usr/bin/printenv",
+    "pass-arguments-to-command": ["ALL_HEADERS"],
+    "pass-environment-to-command": [
+      {"source": "entire-headers", "envname": "ALL_HEADERS"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]
