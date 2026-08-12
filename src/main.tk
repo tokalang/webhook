@@ -1,10 +1,42 @@
 // Copyright (c) 2026 Toka contributors.
 // SPDX-License-Identifier: MIT
 
+import core/option::{Option}
+import std/env::{args_count, get_arg}
 import std/io::{println}
+import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
+import std/task::{block_on}
+import ./webhook::{load_hooks, parse_port, serve_forever_async}
+
+fn usage() {
+    println("Usage: webhook --hooks <hooks.json> [--port <1-65535>]")
+}
 
 pub fn main() -> i32 {
-    println("toka webhook: core HTTP dispatch is available as src/webhook.tk")
-    println("JSON configuration and the long-running CLI are not qualified yet; see UPSTREAM.md")
-    return 0
+    auto hooks_path# = string::from("")
+    auto port# = 9000:u16
+    auto index# = 1:i32
+    loop index < args_count() {
+        auto argument = get_arg(index)
+        if argument.as_str().equals("--hooks") {
+            index = index + 1
+            if index >= args_count() { usage(); return 2 }
+            hooks_path = get_arg(index)
+        } else if argument.as_str().equals("--port") {
+            index = index + 1
+            if index >= args_count() { usage(); return 2 }
+            auto parsed = parse_port(get_arg(index).as_str())
+            if parsed.is_err() { println("invalid --port"); return 2 }
+            port = parsed.unwrap()
+        } else { usage(); return 2 }
+        index = index + 1
+    }
+    if hooks_path.len() == 0:usize { usage(); return 2 }
+
+    auto hooks = load_hooks(hooks_path)
+    if hooks.is_err() { println("failed to load hooks JSON"); return 1 }
+    auto listener# = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0:u8, 0:u8, 0:u8, 0:u8), port))
+    if !listener.is_valid() { println("failed to bind listener"); return 1 }
+    auto server = serve_forever_async(cede hooks.unwrap(), cede listener, 1048576:usize, 30000:i32).start
+    return block_on<i32>(server)
 }

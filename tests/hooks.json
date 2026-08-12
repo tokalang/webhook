@@ -1,0 +1,16 @@
+[
+  {
+    "id": "deploy",
+    "execute-command": "/usr/bin/true",
+    "pass-arguments-to-command": [],
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {
+          "source": "header",
+          "name": "X-Hook-Secret"
+        }
+      }
+    }
+  }
+]

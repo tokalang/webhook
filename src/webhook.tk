@@ -5,10 +5,13 @@
 
 import core/option::{Option}
 import core/result::{Result}
-import std/net::{TcpListener}
+import std/fs::{read_to_string}
+import std/hashmap::{HashMap}
+import std/net::{Ipv4Addr, SocketAddrV4, TcpListener}
 import std/process::{Command}
 import std/vec::{Vec}
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, HttpServer}
+import stdx/serde/json::{JsonNode}
 
 pub shape Hook (
     id: string,
@@ -18,11 +21,128 @@ pub shape Hook (
     required_value: string
 )
 
+shape HeaderRule (
+    name: string,
+    value: string
+)
+
 impl Hook {
     pub fn new(cede id: string, cede command: string, cede args: Vec<string>, cede required_header: string, cede required_value: string) -> Hook {
         return Hook(id = cede id, command = cede command, args = cede args,
                     required_header = cede required_header, required_value = cede required_value)
     }
+
+    pub fn clone(self) -> Hook {
+        return Hook(id = self.id.clone(), command = self.command.clone(), args = self.args.clone(),
+                    required_header = self.required_header.clone(), required_value = self.required_value.clone())
+    }
+}
+
+fn required_field(fields#: HashMap<string, JsonNode>, key: str) -> Result<JsonNode, string> {
+    auto found = fields#.remove(string::from(key))
+    if found.is_none() { return Result<JsonNode, string>::Err(string::from("configuration is missing a required field")) }
+    return Result<JsonNode, string>::Ok(cede found.unwrap())
+}
+
+fn string_value(cede node: JsonNode) -> Result<string, string> {
+    match cede node {
+        auto StrNode('text) => return Result<string, string>::Ok(cede 'text)
+        _ => return Result<string, string>::Err(string::from("configuration value must be a JSON string"))
+    }
+}
+
+fn optional_args(fields#: HashMap<string, JsonNode>) -> Result<Vec<string>, string> {
+    auto found = fields#.remove(string::from("pass-arguments-to-command"))
+    auto args# = Vec<string>::new()
+    if found.is_none() { return Result<Vec<string>, string>::Ok(cede args) }
+    match cede found.unwrap() {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<string>, string>::Err(string::from("arguments array changed during parse")) }
+                auto text = string_value(cede item.unwrap())
+                if text.is_err() { return Result<Vec<string>, string>::Err(text.unwrap_err()) }
+                args#.push(cede text.unwrap())
+            }
+            return Result<Vec<string>, string>::Ok(cede args)
+        }
+        _ => return Result<Vec<string>, string>::Err(string::from("pass-arguments-to-command must be a JSON array"))
+    }
+}
+
+fn header_rule(cede node: JsonNode) -> Result<HeaderRule, string> {
+    match cede node {
+        auto ObjectNode('rule_fields) => {
+            auto rule_fields# = cede 'rule_fields
+            auto matching_node = required_field(rule_fields, "match")!
+            match cede matching_node {
+                auto ObjectNode('matching_fields) => {
+                    auto matching_fields# = cede 'matching_fields
+                    auto expected = string_value(cede required_field(matching_fields, "value")!)!
+                    auto parameter_node = required_field(matching_fields, "parameter")!
+                    match cede parameter_node {
+                        auto ObjectNode('parameter_fields) => {
+                            auto parameter_fields# = cede 'parameter_fields
+                            auto source = string_value(cede required_field(parameter_fields, "source")!)!
+                            if !source.as_str().equals("header") {
+                                return Result<HeaderRule, string>::Err(string::from("only header trigger-rule parameters are supported"))
+                            }
+                            auto name = string_value(cede required_field(parameter_fields, "name")!)!
+                            return Result<HeaderRule, string>::Ok(HeaderRule(name = cede name, value = cede expected))
+                        }
+                        _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule parameter must be an object"))
+                    }
+                }
+                _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule match must be an object"))
+            }
+        }
+        _ => return Result<HeaderRule, string>::Err(string::from("trigger-rule must be an object"))
+    }
+}
+
+fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
+    match cede node {
+        auto ObjectNode('fields) => {
+            auto fields# = cede 'fields
+            auto id = string_value(cede required_field(fields, "id")!)!
+            auto command = string_value(cede required_field(fields, "execute-command")!)!
+            auto args = optional_args(fields)!
+            auto rule = header_rule(cede required_field(fields, "trigger-rule")!)!
+            return Result<Hook, string>::Ok(Hook::new(cede id, cede command, cede args,
+                                                      cede rule.name, cede rule.value))
+        }
+        _ => return Result<Hook, string>::Err(string::from("each hook must be a JSON object"))
+    }
+}
+
+// Parses the common upstream JSON shape. The accepted trigger rule is the
+// value/header match; request-derived command interpolation is rejected.
+pub fn parse_hooks(json: str) -> Result<Vec<Hook>, string> {
+    auto root# = JsonNode::NullNode(0):JsonNode
+    auto parsed = root#.parse_json(json)
+    if parsed.is_err() { return Result<Vec<Hook>, string>::Err(parsed.unwrap_err()) }
+    match cede root {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            auto hooks# = Vec<Hook>::new()
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<Hook>, string>::Err(string::from("hook array changed during parse")) }
+                auto parsed_hook = parse_hook(cede item.unwrap())
+                if parsed_hook.is_err() { return Result<Vec<Hook>, string>::Err(parsed_hook.unwrap_err()) }
+                hooks#.push(cede parsed_hook.unwrap())
+            }
+            return Result<Vec<Hook>, string>::Ok(cede hooks)
+        }
+        _ => return Result<Vec<Hook>, string>::Err(string::from("hook configuration root must be a JSON array"))
+    }
+}
+
+pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
+    auto contents = read_to_string(path)
+    if contents.is_err() { return Result<Vec<Hook>, string>::Err(contents.unwrap_err()) }
+    return parse_hooks(contents.unwrap().as_str())
 }
 
 fn expected_path(hook: Hook) -> string {
@@ -64,6 +184,57 @@ pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
                             headers = cede headers, body = string::from("hook command failed"))
     }
     return HttpResponse::ok(string::from("hook triggered"))
+}
+
+fn find_hook(hooks: Vec<Hook>, path: str) -> Option<Hook> {
+    auto index# = 0:usize
+    loop index < hooks.len() {
+        auto candidate = hooks.get_ref(index).clone()
+        if expected_path(candidate).as_str().equals(path) { return Option<Hook>::Some(cede candidate) }
+        index = index + 1:usize
+    }
+    return Option<Hook>::None
+}
+
+pub fn parse_port(text: str) -> Result<u16, string> {
+    if text.len() == 0:usize { return Result<u16, string>::Err(string::from("port must not be empty")) }
+    auto value# = 0:u32
+    auto index# = 0:usize
+    loop index < text.len() {
+        auto byte = text.byte_at(index)
+        if byte < 48 || byte > 57 { return Result<u16, string>::Err(string::from("port must contain only decimal digits")) }
+        value = value * 10:u32 + (byte - 48) as u32
+        if value > 65535:u32 { return Result<u16, string>::Err(string::from("port is outside the u16 range")) }
+        index = index + 1:usize
+    }
+    if value == 0:u32 { return Result<u16, string>::Err(string::from("port must be non-zero")) }
+    return Result<u16, string>::Ok(value as u16)
+}
+
+// Requests are handled serially in this bounded initial implementation. The
+// accepted connection is always closed after one complete response.
+pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listener: TcpListener,
+                           max_request_bytes: usize, timeout_ms: i32) -> async i32 {
+    auto hooks# = cede supplied_hooks
+    auto listener# = cede supplied_listener
+    loop true {
+        auto accepted = HttpServer::accept_async(listener, max_request_bytes, timeout_ms).await
+        if accepted.is_err() { continue }
+        auto connection# = accepted.unwrap()
+        auto received = connection#.read_request_async().await
+        if received.is_err() {
+            auto _write = connection#.write_response_async(HttpResponse::bad_request(string::from("invalid HTTP request"))).await
+            connection#.close()
+            continue
+        }
+        auto request = received.unwrap()
+        auto selected = find_hook(hooks, request.path.as_str())
+        auto response# = HttpResponse::not_found()
+        if selected.is_some() { response = dispatch(selected.unwrap(), request) }
+        auto _write = connection#.write_response_async(response).await
+        connection#.close()
+    }
+    return 0:i32
 }
 
 pub fn serve_one_async(cede hook: Hook, cede listener: TcpListener, max_request_bytes: usize, timeout_ms: i32) -> async Result<i32, string> {

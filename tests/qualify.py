@@ -28,11 +28,12 @@ def main() -> int:
         raise RuntimeError("build ../toka and its runtime object before qualifying")
 
     with tempfile.TemporaryDirectory(prefix="toka-webhook-") as temporary:
-        for name in ("dispatch", "loopback"):
+        for name in ("config", "dispatch", "loopback"):
             program = Path(temporary) / name
             run([str(tokac), "-I", str(TOKA / "lib"), "-I", str(ROOT / "src"),
                  str(ROOT / "tests" / (name + ".tk")), "-o", str(program)])
             run([str(program)])
+    run([sys.executable, str(ROOT / "tests" / "cli_qualify.py")])
     print("toka-webhook qualification: PASSED")
     return 0
 

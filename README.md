@@ -12,14 +12,23 @@ This program invokes commands only through Toka's structured
 `std/process::Command` argv API. Request data is not interpolated into a shell
 command. The first version runs only literal, configuration-owned arguments.
 
+## Run
+
+```sh
+webhook --hooks hooks.json --port 9000
+```
+
+The configuration is a JSON array using upstream's `id`, `execute-command`,
+`pass-arguments-to-command`, and value/header `trigger-rule.match` keys.
+Only literal argument strings are accepted. The server handles one request per
+connection and one connection at a time in this initial implementation.
+
 ## Current scope
 
 The in-repository vertical slice implements a `POST /hooks/:id` endpoint,
-header equality authorization, and command execution with a completed exit
-status. JSON configuration and a long-running CLI are the next executable
-slice; they are not represented as complete until their compatibility fixtures
-pass. The known standard-library blocker for per-child cwd/environment is in
-[docs/toka-gaps.md](docs/toka-gaps.md).
+header equality authorization, JSON configuration loading, and command
+execution with a completed exit status. The known standard-library blocker for
+per-child cwd/environment is in [docs/toka-gaps.md](docs/toka-gaps.md).
 
 ## Qualification
 
