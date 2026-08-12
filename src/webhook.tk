@@ -876,12 +876,8 @@ fn resolve_argument(argument: Argument, hook: Hook, request: HttpRequest) -> Res
         return payload_argument(request.body.as_str(), argument.name.as_str())
     }
     if argument.source.as_str().equals("raw-request-body") { return Result<string, string>::Ok(request.body.clone()) }
-    if argument.source.as_str().equals("entire-payload") { return Result<string, string>::Ok(request.body.clone()) }
-    if argument.source.as_str().equals("entire-query") {
-        auto marker = request.path.as_str().index_of('?')
-        if marker.is_none() { return Result<string, string>::Ok(string::from("")) }
-        return Result<string, string>::Ok(text_slice(request.path.as_str(), marker.unwrap() + 1:usize, request.path.len()))
-    }
+    if argument.source.as_str().equals("entire-payload") { return entire_payload_json(hook, request) }
+    if argument.source.as_str().equals("entire-query") { return entire_query_json(request.path.as_str()) }
     if argument.source.as_str().equals("entire-headers") { return Result<string, string>::Ok(headers_json(request.headers)) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
         return Result<string, string>::Ok(request_method(request.method, request.headers))
@@ -912,6 +908,63 @@ fn headers_json(headers: HeaderMap) -> string {
     }
     text#.push_str("}")
     return text
+}
+
+fn entire_payload_json(hook: Hook, request: HttpRequest) -> Result<string, string> {
+    auto content_type = hook_content_type(hook, request)
+    match content_type {
+        auto Some(&value) => {
+            if !value.as_str().starts_with("application/json") { return Result<string, string>::Ok(string::from("null")) }
+        }
+        auto None => return Result<string, string>::Ok(string::from("null"))
+    }
+    auto node# = JsonNode::NullNode(0):JsonNode
+    auto parsed = node#.parse_json(request.body.as_str())
+    if parsed.is_err() { return Result<string, string>::Err(string::from("request payload is not valid JSON")) }
+    match cede node {
+        auto ObjectNode('fields) => return Result<string, string>::Ok(request.body.clone())
+        auto ArrayNode('items) => {
+            auto result# = string::from("{\"root\":")
+            result#.push_str(request.body.as_str())
+            result#.push_str("}")
+            return Result<string, string>::Ok(cede result)
+        }
+        _ => return Result<string, string>::Ok(string::from("null"))
+    }
+}
+
+fn entire_query_json(path: str) -> Result<string, string> {
+    auto marker = path.index_of('?')
+    if marker.is_none() { return Result<string, string>::Ok(string::from("{}")) }
+    auto query = text_slice(path, marker.unwrap() + 1:usize, path.len())
+    auto result# = string::from("{")
+    auto first# = true
+    auto offset# = 0:usize
+    loop offset <= query.len() {
+        auto end# = offset
+        loop end < query.len() && query.byte_at(end) != '&' { end = end + 1:usize }
+        auto piece = text_slice(query.as_str(), offset, end)
+        auto equals = piece.as_str().index_of('=')
+        auto raw_key# = piece.clone()
+        auto raw_value# = string::from("")
+        if equals.is_some() {
+            auto split_at = equals.unwrap()
+            raw_key = text_slice(piece.as_str(), 0:usize, split_at)
+            raw_value = text_slice(piece.as_str(), split_at + 1:usize, piece.len())
+        }
+        auto key = query_decode(cede raw_key)
+        auto value = query_decode(cede raw_value)
+        if key.is_err() || value.is_err() { return Result<string, string>::Err(string::from("invalid URL query encoding")) }
+        if !first { result#.push_str(",") }
+        first = false
+        write_escaped_json_string(key.unwrap().as_str(), result)
+        result#.push_str(":")
+        write_escaped_json_string(value.unwrap().as_str(), result)
+        if end == query.len() { break }
+        offset = end + 1:usize
+    }
+    result#.push_str("}")
+    return Result<string, string>::Ok(cede result)
 }
 
 fn parse_array_index(text: str) -> Result<usize, string> {

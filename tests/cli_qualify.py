@@ -139,6 +139,12 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/default-method", method="DELETE")
         if status != 405 or body != b"":
             raise RuntimeError(f"default HTTP method rejection was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/complete-values?message=hello+query", b'{"name":"payload"}')
+        if status != 200 or body != b'{"name":"payload"}|{"message":"hello query"}':
+            raise RuntimeError(f"complete payload/query response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/complete-values", b'[{"name":"array"}]')
+        if status != 200 or body != b'{"root":[{"name":"array"}]}|{}':
+            raise RuntimeError(f"complete JSON array response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

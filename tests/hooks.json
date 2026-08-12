@@ -256,5 +256,17 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "complete-values",
+    "execute-command": "/usr/bin/printf",
+    "pass-arguments-to-command": ["%s|%s", {"source": "entire-payload"}, {"source": "entire-query"}],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]
