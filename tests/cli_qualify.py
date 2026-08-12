@@ -48,7 +48,7 @@ def main() -> int:
 
     port = free_port()
     server = subprocess.Popen(
-        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST", "--urlprefix", PREFIX],
+        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--ip", "127.0.0.1", "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST", "--urlprefix", PREFIX],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
