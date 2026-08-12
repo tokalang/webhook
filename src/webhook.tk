@@ -753,10 +753,7 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
     }
     if argument.source.as_str().equals("entire-headers") { return Result<string, string>::Ok(headers_json(request.headers)) }
     if argument.source.as_str().equals("request") && argument.name.as_str().equals("method") {
-        if request.method == HttpMethod::GET { return Result<string, string>::Ok(string::from("GET")) }
-        if request.method == HttpMethod::POST { return Result<string, string>::Ok(string::from("POST")) }
-        if request.method == HttpMethod::PUT { return Result<string, string>::Ok(string::from("PUT")) }
-        if request.method == HttpMethod::DELETE { return Result<string, string>::Ok(string::from("DELETE")) }
+        return Result<string, string>::Ok(request_method(request.method, request.headers))
     }
     return Result<string, string>::Err(string::from("unsupported request argument source"))
 }
@@ -1053,7 +1050,9 @@ fn apply_global_headers(response#: HttpResponse, global: Vec<ResponseHeader>) {
     }
 }
 
-fn method_text(method: HttpMethod) -> string {
+fn request_method(method: HttpMethod, headers: HeaderMap) -> string {
+    auto raw = headers.get("x-toka-webhook-method")
+    if raw.is_some() { return raw.unwrap() }
     if method == HttpMethod::GET { return string::from("GET") }
     if method == HttpMethod::POST { return string::from("POST") }
     if method == HttpMethod::PUT { return string::from("PUT") }
@@ -1061,9 +1060,9 @@ fn method_text(method: HttpMethod) -> string {
     return string::from("")
 }
 
-fn accepts_method(hook: Hook, method: HttpMethod) -> bool {
+fn accepts_method(hook: Hook, method: HttpMethod, headers: HeaderMap) -> bool {
     if hook.methods.len() == 0:usize { return true }
-    auto actual = method_text(method)
+    auto actual = request_method(method, headers)
     if actual.len() == 0:usize { return false }
     auto index# = 0:usize
     loop index < hook.methods.len() {
@@ -1078,7 +1077,7 @@ pub fn dispatch(hook: Hook, request: HttpRequest) -> HttpResponse {
     if !request_path.as_str().equals(expected_path(hook).as_str()) {
         return HttpResponse::not_found()
     }
-    if !accepts_method(hook, request.method) {
+    if !accepts_method(hook, request.method, request.headers.clone()) {
         return HttpResponse(status_code = 405:i32, content_type = string::from("text/plain"),
                             headers = configured_headers(hook), body = string::from(""))
     }
@@ -1215,6 +1214,17 @@ fn omit_empty_headers(raw: str) -> string {
     return cleaned
 }
 
+fn request_wire_method(raw: str) -> Result<string, string> {
+    auto space = raw.index_of(' ')
+    match space {
+        auto Option<usize>::Some(end) => {
+            if end == 0:usize { return Result<string, string>::Err(string::from("malformed HTTP request method")) }
+            return Result<string, string>::Ok(text_slice(raw, 0:usize, end))
+        }
+        _ => return Result<string, string>::Err(string::from("malformed HTTP request method"))
+    }
+}
+
 fn write_local_response_async(stream#: TcpStream, response: HttpResponse, timeout_ms: i32) -> async Result<(), string> {
     auto wire = response_wire(response)
     auto written = stream#.write_from_async(cede wire_bytes(wire.as_str()), timeout_ms).await
@@ -1249,7 +1259,13 @@ fn read_local_request_async(stream#: TcpStream, max_request_bytes: usize, timeou
             index = index + 1:usize
         }
         auto parsed = parse_http_request_with_limit(omit_empty_headers(text.as_str()), max_request_bytes)
-        if parsed.is_ok() { return parsed }
+        if parsed.is_ok() {
+            auto request# = parsed.unwrap()
+            auto method = request_wire_method(text.as_str())
+            if method.is_err() { return Result<HttpRequest, string>::Err(method.unwrap_err()) }
+            auto _method = request.headers#.insert(string::from("X-Toka-Webhook-Method"), method.unwrap())
+            return Result<HttpRequest, string>::Ok(cede request)
+        }
         last_error = parsed.unwrap_err()
     }
     return Result<HttpRequest, string>::Err(string::from("HTTP request exceeds configured size limit"))

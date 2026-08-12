@@ -112,6 +112,9 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/xml", b"<repository><name>toka-xml</name></repository>", content_type="application/xml")
         if status != 200 or body != b"toka-xml":
             raise RuntimeError(f"XML payload response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/patch-only", method="PATCH")
+        if status != 200 or body != b"PATCH accepted":
+            raise RuntimeError(f"configured PATCH response was {(status, body)!r}")
     finally:
         server.terminate()
         try:
