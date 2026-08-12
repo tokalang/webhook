@@ -106,6 +106,9 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/form", b"message=hello+form", content_type="application/x-www-form-urlencoded")
         if status != 200 or body != b"hello form":
             raise RuntimeError(f"form payload response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/xml", b"<repository><name>toka-xml</name></repository>", content_type="application/xml")
+        if status != 200 or body != b"toka-xml":
+            raise RuntimeError(f"XML payload response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

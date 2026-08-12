@@ -14,7 +14,7 @@ import std/bytes::{Bytes}
 import std/vec::{Vec}
 import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
 import stdx/encoding/hex
-import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit}
+import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit, string_slice}
 import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode, write_escaped_json_string}
 
@@ -738,6 +738,9 @@ fn resolve_argument(argument: Argument, request: HttpRequest) -> Result<string, 
             if content_type_value.as_str().starts_with("application/x-www-form-urlencoded") {
                 return form_argument(request.body.as_str(), argument.name.as_str())
             }
+            if content_type_value.as_str().starts_with("application/xml") || content_type_value.as_str().starts_with("text/xml") {
+                return xml_argument(request.body.as_str(), argument.name.as_str())
+            }
         }
         return payload_argument(request.body.as_str(), argument.name.as_str())
     }
@@ -896,6 +899,75 @@ fn form_argument(body: str, name: str) -> Result<string, string> {
         offset = end + 1:usize
     }
     return Result<string, string>::Err(string::from("payload field is missing"))
+}
+
+// A bounded XML field resolver for the configuration-compatible dotted element
+// paths. It deliberately rejects attributes, namespaces, CDATA, entities, and
+// mixed content instead of guessing their text representation.
+fn xml_argument(xml: str, path: str) -> Result<string, string> {
+    if xml.index_of('<').is_none() { return Result<string, string>::Err(string::from("payload is not XML")) }
+    auto remaining# = string::from(path)
+    auto cursor# = 0:usize
+    loop remaining.len() > 0:usize {
+        auto dot = remaining.as_str().index_of('.')
+        auto final_segment# = dot.is_none()
+        auto name# = remaining.clone()
+        auto next_offset# = 0:usize
+        if !final_segment {
+            next_offset = dot.unwrap()
+            name = xml_slice(remaining.as_str(), 0:usize, next_offset)
+        }
+        if name.len() == 0:usize { return Result<string, string>::Err(string::from("XML payload path is invalid")) }
+        auto open# = string::from("<")
+        open#.push_str(name.as_str())
+        open#.push_str(">")
+        auto found = substring_index(xml_slice(xml, cursor, xml.len()).as_str(), open.as_str())
+        if found.is_none() { return Result<string, string>::Err(string::from("payload field is missing")) }
+        auto content_start = cursor + found.unwrap() + open.len()
+        auto close# = string::from("</")
+        close#.push_str(name.as_str())
+        close#.push_str(">")
+        auto close_at = substring_index(xml_slice(xml, content_start, xml.len()).as_str(), close.as_str())
+        if close_at.is_none() { return Result<string, string>::Err(string::from("malformed XML payload")) }
+        auto content_end = content_start + close_at.unwrap()
+        if final_segment {
+            auto value# = string::from("")
+            auto value_index# = content_start
+            loop value_index < content_end {
+                value#.push_byte_raw(xml.byte_at(value_index))
+                value_index = value_index + 1:usize
+            }
+            if value.index_of('<').is_some() || value.index_of('&').is_some() { return Result<string, string>::Err(string::from("XML value is not a scalar")) }
+            return Result<string, string>::Ok(cede value)
+        }
+        cursor = content_start
+        remaining = xml_slice(remaining.as_str(), next_offset + 1:usize, remaining.len())
+    }
+    return Result<string, string>::Err(string::from("XML payload path is invalid"))
+}
+
+fn xml_slice(source: str, start: usize, end: usize) -> string {
+    return string_slice(string::from(source), start, end - start)
+}
+
+fn substring_index(source: str, needle: str) -> Option<usize> {
+    if needle.len() == 0:usize { return Option<usize>::Some(0:usize) }
+    if needle.len() > source.len() { return Option<usize>::None }
+    auto offset# = 0:usize
+    loop offset + needle.len() <= source.len() {
+        auto index# = 0:usize
+        auto matches# = true
+        loop index < needle.len() {
+            if source.byte_at(offset + index) != needle.byte_at(index) {
+                matches = false
+                break
+            }
+            index = index + 1:usize
+        }
+        if matches { return Option<usize>::Some(offset) }
+        offset = offset + 1:usize
+    }
+    return Option<usize>::None
 }
 
 fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {

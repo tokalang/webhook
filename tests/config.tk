@@ -39,5 +39,8 @@ fn main() -> i32 {
 
     auto form = parse_hooks("[{\"id\":\"form\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[{\"source\":\"payload\",\"name\":\"message\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(form.is_ok(), "form payload command configuration parses")
+
+    auto xml = parse_hooks("[{\"id\":\"xml\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[{\"source\":\"payload\",\"name\":\"repository.name\"}],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
+    assert(xml.is_ok(), "XML payload command configuration parses")
     return 0
 }
