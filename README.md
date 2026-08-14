@@ -9,8 +9,9 @@ source version, license notice, and compatibility boundary.
 ## Safety boundary
 
 This program invokes commands only through Toka's structured
-`std/process::Command` argv API. Request data is not interpolated into a shell
-command. The first version runs only literal, configuration-owned arguments.
+`std/process::Command` argv API. Request data is never interpolated into a
+shell command: it is passed as individual argv/environment values or through
+an exclusively-created request-temporary file.
 
 ## Run
 
@@ -22,7 +23,10 @@ toka build
 ```
 
 The configuration is a JSON array using upstream's `id`, `execute-command`,
-`pass-arguments-to-command`, and value/header `trigger-rule.match` keys.
+`pass-arguments-to-command`, `pass-file-to-command`, and value/header
+`trigger-rule.match` keys. File bindings write each request value to a 0600
+temporary file; the configured child receives its path through `envname` (or
+`HOOK_<UPPERCASE_NAME>`), and the file is removed after the child exits.
 The optional repeatable `--header name=value` flag adds a response header to
 every result (including CORS headers). The server handles one request per
 connection and one connection at a time in this initial implementation.
@@ -31,24 +35,30 @@ connection and one connection at a time in this initial implementation.
 
 The implementation covers a bounded, configuration-driven subset of the
 upstream behavior. It supports request references, selected rule types,
-structured argv execution, per-child working directories/environments, and
-configurable request/response policy. The complete Linux/macOS compatibility
-contract is in
+structured argv execution, per-child working directories/environments,
+request-temporary files, and configurable request/response policy. The
+complete Linux/macOS compatibility contract is in
 [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
 ## Qualification
 
-With an installed RC5 SDK on `PATH` (the installer configures `TOKA_LIB`):
+With a compatible installed SDK on `PATH` (the installer configures
+`TOKA_LIB`):
 
 ```sh
 python3 tests/qualify.py
 ```
 
-For an extracted release archive that is not installed, point the test at it:
+For an extracted SDK archive that is not installed, point the test at it:
 
 ```sh
-TOKA_SDK=/path/to/toka-v1.0.0-rc.5-macos-arm64 python3 tests/qualify.py
+TOKA_SDK=/path/to/toka-sdk python3 tests/qualify.py
 ```
 
 The qualification compiles and runs both direct dispatch and loopback HTTP
-tests against the published SDK, not a sibling source checkout.
+tests against the selected SDK, not a sibling source checkout.
+
+`pass-file-to-command` requires Toka's `std/fs::TempFile` and nominal-resource
+ABI fixes. Until those local Toka commits are included in a published SDK, use
+the explicit `TOKA`, `TOKAC`, and `TOKA_LIB` toolchain variables when running
+the qualification.

@@ -143,6 +143,16 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/complete-values", b'[{"name":"array"}]')
         if status != 200 or body != b'{"root":[{"name":"array"}]}|{}':
             raise RuntimeError(f"complete JSON array response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/file", b"request file payload")
+        if status != 200 or body != b"request file payload":
+            raise RuntimeError(f"raw temporary file response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/file-base64", b"AGJhcgo=")
+        if status != 200 or body != b"\x00bar\n":
+            raise RuntimeError(f"base64 temporary file response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/file-cleanup", b"cleanup")
+        cleanup_path = Path(body.decode().strip())
+        if status != 200 or not cleanup_path.is_absolute() or cleanup_path.exists():
+            raise RuntimeError(f"temporary file cleanup response was {(status, body)!r}")
     finally:
         server.terminate()
         try:

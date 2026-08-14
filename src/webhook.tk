@@ -5,7 +5,8 @@
 
 import core/option::{Option}
 import core/result::{Result}
-import std/fs::{read_to_string, write_string}
+import std/error::{IoError}
+import std/fs::{TempFile, create_temp_file, create_temp_file_system, read_to_string, write_string}
 import std/hashmap::{HashMap}
 import std/io::{remove_file}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}
@@ -13,6 +14,7 @@ import std/process::{Command, STDIO_NULL}
 import std/bytes::{Bytes}
 import std/vec::{Vec}
 import stdx/crypto/hmac::{hmac_sha1_verify, hmac_sha256_verify, hmac_sha512_verify}
+import stdx/encoding/base64
 import stdx/encoding/hex
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit, string_slice}
 import stdx/net/url::{query_decode}
@@ -31,6 +33,7 @@ pub shape Hook (
     rule_kind: string,
     rule_secret: string,
     environment: Vec<Argument>,
+    files: Vec<FileBinding>,
     response_message: string,
     capture_output: bool,
     capture_output_on_error: bool,
@@ -47,6 +50,13 @@ pub shape Argument (
     env_name: string
 )
 
+pub shape FileBinding (
+    source: string,
+    name: string,
+    env_name: string,
+    base64_decode: bool
+)
+
 pub shape ResponseHeader (
     name: string,
     value: string
@@ -61,6 +71,13 @@ impl ResponseHeader {
 impl Argument {
     pub fn clone(self) -> Argument {
         return Argument(source = self.source.clone(), name = self.name.clone(), env_name = self.env_name.clone())
+    }
+}
+
+impl FileBinding {
+    pub fn clone(self) -> FileBinding {
+        return FileBinding(source = self.source.clone(), name = self.name.clone(),
+                           env_name = self.env_name.clone(), base64_decode = self.base64_decode)
     }
 }
 
@@ -108,6 +125,7 @@ fn clone_rule_list(source: Vec<TriggerRule>) -> Vec<TriggerRule> {
 impl Hook {
     pub fn new(cede id: string, cede command: string, cede args: Vec<Argument>, cede working_dir: string, cede required_header: string, cede required_value: string, cede rule_kind: string, cede rule_secret: string) -> Hook {
         auto environment# = Vec<Argument>::new()
+        auto files# = Vec<FileBinding>::new()
         auto response_headers# = Vec<ResponseHeader>::new()
         auto methods# = Vec<string>::new()
         auto rule = TriggerRule::MatchNode(HeaderRule(name = required_header.clone(), value = required_value.clone(),
@@ -115,6 +133,7 @@ impl Hook {
         return Hook(id = cede id, command = cede command, args = cede args, working_dir = cede working_dir,
                     required_header = cede required_header, required_value = cede required_value,
                     rule_kind = cede rule_kind, rule_secret = cede rule_secret, environment = cede environment,
+                    files = cede files,
                     response_message = string::from("hook triggered"), capture_output = false,
                     capture_output_on_error = false, success_status = 200:i32, mismatch_status = 400:i32,
                     response_headers = cede response_headers, methods = cede methods, rule = cede rule)
@@ -133,6 +152,12 @@ impl Hook {
             environment#.push(cede self.environment.get_ref(index).clone())
             index = index + 1:usize
         }
+        auto files# = Vec<FileBinding>::new()
+        index = 0:usize
+        loop index < self.files.len() {
+            files#.push(cede self.files.get_ref(index).clone())
+            index = index + 1:usize
+        }
         auto response_headers# = Vec<ResponseHeader>::new()
         index = 0:usize
         loop index < self.response_headers.len() {
@@ -143,7 +168,7 @@ impl Hook {
         return Hook(id = self.id.clone(), command = self.command.clone(), args = cede args,
                     working_dir = self.working_dir.clone(), required_header = self.required_header.clone(),
                     required_value = self.required_value.clone(), rule_kind = self.rule_kind.clone(),
-                    rule_secret = self.rule_secret.clone(), environment = cede environment,
+                    rule_secret = self.rule_secret.clone(), environment = cede environment, files = cede files,
                     response_message = self.response_message.clone(), capture_output = self.capture_output,
                     capture_output_on_error = self.capture_output_on_error, success_status = self.success_status,
                     mismatch_status = self.mismatch_status, response_headers = cede response_headers, methods = cede methods,
@@ -313,6 +338,44 @@ fn optional_environment(fields#: HashMap<string, JsonNode>) -> Result<Vec<Argume
             return Result<Vec<Argument>, string>::Ok(cede values)
         }
         _ => return Result<Vec<Argument>, string>::Err(string::from("pass-environment-to-command must be a JSON array"))
+    }
+}
+
+fn parse_file_binding(cede node: JsonNode) -> Result<FileBinding, string> {
+    match cede node {
+        auto ObjectNode('fields) => {
+            auto fields# = cede 'fields
+            auto source = optional_string(fields, "source", "string")!
+            auto name = optional_string(fields, "name", "")!
+            auto env_name = optional_string(fields, "envname", "")!
+            auto base64_decode = optional_bool(fields, "base64decode", false)!
+            if name.len() == 0:usize {
+                return Result<FileBinding, string>::Err(string::from("pass-file-to-command entry requires name"))
+            }
+            return Result<FileBinding, string>::Ok(FileBinding(source = cede source, name = cede name,
+                env_name = cede env_name, base64_decode = base64_decode))
+        }
+        _ => return Result<FileBinding, string>::Err(string::from("pass-file-to-command entry must be an object"))
+    }
+}
+
+fn optional_files(fields#: HashMap<string, JsonNode>) -> Result<Vec<FileBinding>, string> {
+    auto found = fields#.remove(string::from("pass-file-to-command"))
+    auto files# = Vec<FileBinding>::new()
+    if found.is_none() { return Result<Vec<FileBinding>, string>::Ok(cede files) }
+    match cede found.unwrap() {
+        auto ArrayNode('items) => {
+            auto items# = cede 'items
+            loop !items.is_empty() {
+                auto item = items#.remove(0:usize)
+                if item.is_none() { return Result<Vec<FileBinding>, string>::Err(string::from("file binding array changed during parse")) }
+                auto parsed = parse_file_binding(cede item.unwrap())
+                if parsed.is_err() { return Result<Vec<FileBinding>, string>::Err(parsed.unwrap_err()) }
+                files#.push(cede parsed.unwrap())
+            }
+            return Result<Vec<FileBinding>, string>::Ok(cede files)
+        }
+        _ => return Result<Vec<FileBinding>, string>::Err(string::from("pass-file-to-command must be a JSON array"))
     }
 }
 
@@ -486,6 +549,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto args = optional_args(fields)!
             auto working_dir = optional_string(fields, "command-working-directory", "")!
             auto environment = optional_environment(fields)!
+            auto files = optional_files(fields)!
             auto response_message = optional_string(fields, "response-message", "hook triggered")!
             auto capture_output = optional_bool(fields, "include-command-output-in-response", false)!
             auto capture_output_on_error = optional_bool(fields, "include-command-output-in-response-on-error", false)!
@@ -498,6 +562,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
             auto hook# = Hook::new(cede id, cede command, cede args, cede working_dir,
                                    cede string::from(""), cede string::from(""), cede string::from("value"), cede string::from(""))
             hook.environment = cede environment
+            hook.files = cede files
             hook.response_message = cede response_message
             hook.capture_output = capture_output
             hook.capture_output_on_error = capture_output_on_error
@@ -1235,6 +1300,55 @@ fn substring_index(source: str, needle: str) -> Option<usize> {
     return Option<usize>::None
 }
 
+fn file_binding_content(binding: FileBinding, hook: Hook, request: HttpRequest) -> Result<string, string> {
+    auto argument = Argument(source = binding.source.clone(), name = binding.name.clone(), env_name = string::from(""))
+    auto resolved = resolve_argument(cede argument, hook, request)
+    if resolved.is_err() { return Result<string, string>::Err(resolved.unwrap_err()) }
+    if !binding.base64_decode { return resolved }
+
+    auto decoded = base64::decode(resolved.unwrap().as_str())
+    if decoded.is_err() { return Result<string, string>::Err(string::from("pass-file-to-command value is not valid Base64")) }
+    auto bytes# = decoded.unwrap()
+    auto content# = string::from("")
+    loop !bytes.is_empty() {
+        auto byte = bytes#.remove(0:usize)
+        if byte.is_some() { content#.push_byte_raw(byte.unwrap()) }
+    }
+    return Result<string, string>::Ok(cede content)
+}
+
+fn file_binding_environment_name(binding: FileBinding) -> string {
+    if binding.env_name.len() > 0:usize { return binding.env_name.clone() }
+    auto name# = string::from("HOOK_")
+    name#.push_str(binding.name.to_upper().as_str())
+    return name
+}
+
+fn cleanup_temp_files(files#: Vec<TempFile>) -> bool {
+    auto cleaned# = true
+    loop !files.is_empty() {
+        auto item = files#.remove(0:usize)
+        if item.is_some() {
+            auto file# = item.unwrap()
+            if file#.remove().is_err() { cleaned = false }
+        }
+    }
+    return cleaned
+}
+
+fn finish_with_temp_file_cleanup(cede result: Result<string, string>, cede files: Vec<TempFile>) -> Result<string, string> {
+    auto owned_files# = cede files
+    if !cleanup_temp_files(owned_files) {
+        return Result<string, string>::Err(string::from("temporary command file could not be removed"))
+    }
+    return cede result
+}
+
+fn create_command_temp_file(working_dir: string) -> Result<TempFile, IoError> {
+    if working_dir.len() > 0:usize { return create_temp_file(working_dir) }
+    return create_temp_file_system()
+}
+
 fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
     auto command# = Command::new(hook.command.clone())
     if hook.working_dir.len() > 0:usize { command#.current_dir(hook.working_dir.clone()) }
@@ -1259,23 +1373,48 @@ fn execute(hook: Hook, request: HttpRequest) -> Result<string, string> {
         command#.env(cede key, cede value.unwrap())
         index = index + 1:usize
     }
+    auto files# = Vec<TempFile>::new()
+    index = 0:usize
+    loop index < hook.files.len() {
+        auto binding = hook.files.get_ref(index).clone()
+        auto content = file_binding_content(binding.clone(), hook.clone(), request)
+        if content.is_err() { return Result<string, string>::Err(content.unwrap_err()) }
+        auto text = content.unwrap()
+        auto created = create_command_temp_file(hook.working_dir.clone())
+        if created.is_err() {
+            return Result<string, string>::Err(string::from("temporary command file could not be created"))
+        }
+        auto file# = created.unwrap()
+        auto written = file#.write(text.as_str())
+        if written.is_err() {
+            return Result<string, string>::Err(string::from("temporary command file could not be written"))
+        }
+        auto count = written.unwrap()
+        if count != text.len() { return Result<string, string>::Err(string::from("temporary command file could not be written")) }
+        if file#.close().is_err() {
+            return Result<string, string>::Err(string::from("temporary command file could not be closed"))
+        }
+        command#.env(cede file_binding_environment_name(binding), cede file.path())
+        files#.push(cede file)
+        index = index + 1:usize
+    }
     if hook.capture_output {
         auto output = command#.output()
-        if output.is_err() { return Result<string, string>::Err(string::from("configured command could not be started")) }
+        if output.is_err() { return finish_with_temp_file_cleanup(Result<string, string>::Err(string::from("configured command could not be started")), cede files) }
         auto completed = output.unwrap()
-        if completed.status.success() { return Result<string, string>::Ok(completed.stdout.clone()) }
+        if completed.status.success() { return finish_with_temp_file_cleanup(Result<string, string>::Ok(completed.stdout.clone()), cede files) }
         if hook.capture_output_on_error {
             auto text# = completed.stdout
             text#.push_str(completed.stderr.as_str())
-            return Result<string, string>::Err(cede text)
+            return finish_with_temp_file_cleanup(Result<string, string>::Err(cede text), cede files)
         }
-        return Result<string, string>::Err(string::from("configured command returned non-zero status"))
+        return finish_with_temp_file_cleanup(Result<string, string>::Err(string::from("configured command returned non-zero status")), cede files)
     }
     auto status = command#.try_status()
-    if status.is_err() { return Result<string, string>::Err(string::from("configured command could not be started")) }
+    if status.is_err() { return finish_with_temp_file_cleanup(Result<string, string>::Err(string::from("configured command could not be started")), cede files) }
     auto exit = status.unwrap()
-    if !exit.success() { return Result<string, string>::Err(string::from("configured command returned non-zero status")) }
-    return Result<string, string>::Ok(hook.response_message.clone())
+    if !exit.success() { return finish_with_temp_file_cleanup(Result<string, string>::Err(string::from("configured command returned non-zero status")), cede files) }
+    return finish_with_temp_file_cleanup(Result<string, string>::Ok(hook.response_message.clone()), cede files)
 }
 
 // This partial policy accepts a header value or payload HMAC rule and invokes

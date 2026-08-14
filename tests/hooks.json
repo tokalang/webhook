@@ -268,5 +268,50 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "file",
+    "execute-command": "/usr/bin/python3",
+    "pass-arguments-to-command": ["-c", "import os,sys;sys.stdout.buffer.write(open(os.environ['HOOK_BODY'],'rb').read())"],
+    "pass-file-to-command": [
+      {"source": "raw-request-body", "name": "body"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
+  },
+  {
+    "id": "file-base64",
+    "execute-command": "/usr/bin/python3",
+    "pass-arguments-to-command": ["-c", "import os,sys;sys.stdout.buffer.write(open(os.environ['HOOK_BINARY'],'rb').read())"],
+    "pass-file-to-command": [
+      {"source": "raw-request-body", "name": "binary", "base64decode": true}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
+  },
+  {
+    "id": "file-cleanup",
+    "execute-command": "/usr/bin/printenv",
+    "pass-arguments-to-command": ["HOOK_CLEANUP"],
+    "pass-file-to-command": [
+      {"source": "raw-request-body", "name": "cleanup"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]
