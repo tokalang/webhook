@@ -8,13 +8,13 @@ import subprocess
 import sys
 import tempfile
 
+from sdk import resolve_sdk
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKA = ROOT.parent / "toka"
 
 
-def run(argv: list[str]) -> None:
-    completed = subprocess.run(argv, cwd=ROOT, text=True, capture_output=True)
+def run(argv: list[str], environment: dict[str, str]) -> None:
+    completed = subprocess.run(argv, cwd=ROOT, env=environment, text=True, capture_output=True)
     if completed.returncode:
         raise RuntimeError(
             f"command failed: {' '.join(argv)}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
@@ -22,18 +22,16 @@ def run(argv: list[str]) -> None:
 
 
 def main() -> int:
-    tokac = TOKA / "build" / "bin" / "tokac"
-    runtime = TOKA / "lib" / "sys" / "toka_rt.o"
-    if not tokac.is_file() or not runtime.is_file():
-        raise RuntimeError("build ../toka and its runtime object before qualifying")
+    sdk = resolve_sdk()
+    environment = sdk.environment()
 
     with tempfile.TemporaryDirectory(prefix="toka-webhook-") as temporary:
         for name in ("config", "dispatch", "signatures", "loopback"):
             program = Path(temporary) / name
-            run([str(tokac), "-I", str(TOKA / "lib"), "-I", str(ROOT / "src"),
-                 str(ROOT / "tests" / (name + ".tk")), "-o", str(program)])
-            run([str(program)])
-    run([sys.executable, str(ROOT / "tests" / "cli_qualify.py")])
+            run([str(sdk.tokac), "-I", str(sdk.library), "-I", str(ROOT / "src"),
+                 str(ROOT / "tests" / (name + ".tk")), "-o", str(program)], environment)
+            run([str(program)], environment)
+    run([sys.executable, str(ROOT / "tests" / "cli_qualify.py")], environment)
     print("toka-webhook qualification: PASSED")
     return 0
 

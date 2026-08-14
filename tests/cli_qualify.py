@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 from http.client import HTTPConnection
-import os
 from pathlib import Path
 import socket
 import subprocess
 import time
 
+from sdk import resolve_sdk
+
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKA = ROOT.parent / "toka"
 PREFIX = "callbacks"
 
 
@@ -40,11 +40,9 @@ def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b
 
 
 def main() -> int:
-    toka = TOKA / "build" / "bin" / "toka"
-    if not toka.is_file():
-        raise RuntimeError("build ../toka before qualifying webhook")
-    environment = os.environ | {"TOKA_LIB": str(TOKA / "lib")}
-    subprocess.run([str(toka), "build"], cwd=ROOT, env=environment, check=True)
+    sdk = resolve_sdk()
+    environment = sdk.environment()
+    subprocess.run([str(sdk.toka), "build"], cwd=ROOT, env=environment, check=True)
 
     port = free_port()
     server = subprocess.Popen(

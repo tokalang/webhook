@@ -15,7 +15,10 @@ command. The first version runs only literal, configuration-owned arguments.
 ## Run
 
 ```sh
-webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'
+curl -fsSL https://tokalang.dev/install.sh | bash -s -- v1.0.0-rc.5
+toka doctor
+toka build
+./target/debug/webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'
 ```
 
 The configuration is a JSON array using upstream's `id`, `execute-command`,
@@ -26,20 +29,26 @@ connection and one connection at a time in this initial implementation.
 
 ## Current scope
 
-The in-repository vertical slice implements a `POST /hooks/:id` endpoint,
-header equality authorization, JSON configuration loading, and command
-execution with a completed exit status. The known standard-library blocker for
-per-child cwd/environment is in [docs/toka-gaps.md](docs/toka-gaps.md).
-The complete Linux/macOS compatibility contract is in
+The implementation covers a bounded, configuration-driven subset of the
+upstream behavior. It supports request references, selected rule types,
+structured argv execution, per-child working directories/environments, and
+configurable request/response policy. The complete Linux/macOS compatibility
+contract is in
 [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
 ## Qualification
 
-With a Toka checkout at `../toka`:
+With an installed RC5 SDK on `PATH` (the installer configures `TOKA_LIB`):
 
 ```sh
 python3 tests/qualify.py
 ```
 
+For an extracted release archive that is not installed, point the test at it:
+
+```sh
+TOKA_SDK=/path/to/toka-v1.0.0-rc.5-macos-arm64 python3 tests/qualify.py
+```
+
 The qualification compiles and runs both direct dispatch and loopback HTTP
-tests against the local Toka compiler and runtime.
+tests against the published SDK, not a sibling source checkout.
