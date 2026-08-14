@@ -39,6 +39,37 @@ def request(port: int, secret: str, path: str = "/hooks/deploy", body: bytes = b
     return response.status, body, configured_header
 
 
+def qualify_yaml(binary: Path) -> None:
+    port = free_port()
+    server = subprocess.Popen(
+        [str(binary), "--hooks", str(ROOT / "tests" / "hooks.yaml"), "--ip", "127.0.0.1", "--port", str(port), "--urlprefix", PREFIX],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for _ in range(50):
+            if server.poll() is not None:
+                stdout, stderr = server.communicate()
+                raise RuntimeError(f"YAML webhook exited early: {stdout!r} {stderr!r}")
+            try:
+                status, body, _ = request(port, "correct-horse", "/hooks/yaml?message=YAML+accepted")
+                break
+            except OSError:
+                time.sleep(0.02)
+        else:
+            raise RuntimeError("YAML webhook did not accept a loopback connection")
+        if status != 200 or body != b"YAML accepted":
+            raise RuntimeError(f"YAML webhook response was {(status, body)!r}")
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=3)
+
+
 def main() -> int:
     sdk = resolve_sdk()
     environment = sdk.environment()
@@ -160,6 +191,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             server.kill()
             server.wait(timeout=3)
+    qualify_yaml(ROOT / "target" / "debug" / "webhook")
     print("toka-webhook CLI qualification: PASSED")
     return 0
 

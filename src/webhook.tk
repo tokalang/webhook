@@ -19,6 +19,7 @@ import stdx/encoding/hex
 import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_http_request_with_limit, string_slice}
 import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode, write_escaped_json_string}
+import stdx/serde/yaml
 
 extern fn getpeername(fd: i32, *addr: void, *addrlen: u32) -> i32
 extern fn libc_free(*ptr: void) -> void
@@ -583,10 +584,7 @@ fn parse_hook(cede node: JsonNode) -> Result<Hook, string> {
 
 // Parses the common upstream JSON shape. The accepted trigger rule is the
 // value/header match; request-derived command interpolation is rejected.
-pub fn parse_hooks(json: str) -> Result<Vec<Hook>, string> {
-    auto root# = JsonNode::NullNode(0):JsonNode
-    auto parsed = root#.parse_json(json)
-    if parsed.is_err() { return Result<Vec<Hook>, string>::Err(parsed.unwrap_err()) }
+fn parse_hook_root(cede root: JsonNode) -> Result<Vec<Hook>, string> {
     match cede root {
         auto ArrayNode('items) => {
             auto items# = cede 'items
@@ -604,10 +602,29 @@ pub fn parse_hooks(json: str) -> Result<Vec<Hook>, string> {
     }
 }
 
+pub fn parse_hooks(json: str) -> Result<Vec<Hook>, string> {
+    auto root# = JsonNode::NullNode(0):JsonNode
+    auto parsed = root#.parse_json(json)
+    if parsed.is_err() { return Result<Vec<Hook>, string>::Err(parsed.unwrap_err()) }
+    return parse_hook_root(cede root)
+}
+
+pub fn parse_yaml_hooks(input: str) -> Result<Vec<Hook>, string> {
+    auto parsed = yaml::parse(input)
+    if parsed.is_err() {
+        auto error = parsed.unwrap_err()
+        return Result<Vec<Hook>, string>::Err(error.message())
+    }
+    return parse_hook_root(cede parsed.unwrap())
+}
+
 pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
     auto contents = read_to_string(path)
     if contents.is_err() { return Result<Vec<Hook>, string>::Err(contents.unwrap_err()) }
-    return parse_hooks(contents.unwrap().as_str())
+    auto text = contents.unwrap()
+    auto json = parse_hooks(text.as_str())
+    if json.is_ok() { return json }
+    return parse_yaml_hooks(text.as_str())
 }
 
 fn expected_path(hook: Hook) -> string {

@@ -22,8 +22,8 @@ toka build
 ./target/debug/webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'
 ```
 
-The configuration is a JSON array using upstream's `id`, `execute-command`,
-`pass-arguments-to-command`, `pass-file-to-command`, and value/header
+The configuration is a JSON or YAML array using upstream's `id`,
+`execute-command`, `pass-arguments-to-command`, `pass-file-to-command`, and value/header
 `trigger-rule.match` keys. File bindings write each request value to a 0600
 temporary file; the configured child receives its path through `envname` (or
 `HOOK_<UPPERCASE_NAME>`), and the file is removed after the child exits.
@@ -36,7 +36,7 @@ connection and one connection at a time in this initial implementation.
 The implementation covers a bounded, configuration-driven subset of the
 upstream behavior. It supports request references, selected rule types,
 structured argv execution, per-child working directories/environments,
-request-temporary files, and configurable request/response policy. The
+request-temporary files, YAML hooks files, and configurable request/response policy. The
 complete Linux/macOS compatibility contract is in
 [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 

@@ -1,4 +1,4 @@
-import webhook::{parse_default_methods, parse_hooks}
+import webhook::{load_hooks, parse_default_methods, parse_hooks}
 
 fn main() -> i32 {
     auto parsed = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[\"--quiet\",\"--dry-run\"],\"command-working-directory\":\"/private/tmp\",\"trigger-rule\":{\"match\":{\"value\":\"correct-horse\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Hook-Secret\"}}}}]")
@@ -60,6 +60,10 @@ fn main() -> i32 {
 
     auto invalid_file_binding = parse_hooks("[{\"id\":\"file\",\"execute-command\":\"/usr/bin/true\",\"pass-file-to-command\":[\"body\"],\"trigger-rule\":{\"match\":{\"value\":\"x\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Secret\"}}}}]")
     assert(invalid_file_binding.is_err(), "file command binding must be an object")
+
+    auto yaml = load_hooks(string::from("tests/hooks.yaml"))
+    assert(yaml.is_ok(), "YAML hook configuration loads")
+    assert(yaml.unwrap().len() == 1:usize, "YAML hook configuration has one hook")
 
     auto default_methods = parse_default_methods("GET, POST")
     assert(default_methods.is_ok(), "default HTTP methods parse")
