@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 from http.client import HTTPConnection
+import os
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 import time
 
 from sdk import resolve_sdk
@@ -68,6 +70,44 @@ def qualify_yaml(binary: Path) -> None:
         except subprocess.TimeoutExpired:
             server.kill()
             server.wait(timeout=3)
+
+
+def qualify_template(binary: Path, base_environment: dict[str, str]) -> None:
+    port = free_port()
+    with tempfile.TemporaryDirectory() as credentials_directory:
+        credential = Path(credentials_directory) / "template-secret"
+        credential.write_text("from-credential\n", encoding="utf-8")
+        environment = base_environment.copy()
+        environment["TOKA_WEBHOOK_TEMPLATE_VALUE"] = "from-env"
+        environment["CREDENTIALS_DIRECTORY"] = credentials_directory
+        server = subprocess.Popen(
+            [str(binary), "--hooks", str(ROOT / "tests" / "hooks.template.json"), "--template", "--ip", "127.0.0.1", "--port", str(port), "--urlprefix", PREFIX],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            for _ in range(50):
+                if server.poll() is not None:
+                    stdout, stderr = server.communicate()
+                    raise RuntimeError(f"template webhook exited early: {stdout!r} {stderr!r}")
+                try:
+                    status, body, _ = request(port, "template-secret", "/hooks/template")
+                    break
+                except OSError:
+                    time.sleep(0.02)
+            else:
+                raise RuntimeError("template webhook did not accept a loopback connection")
+            if status != 200 or body != b"from-env|from-cat|from-credential":
+                raise RuntimeError(f"template webhook response was {(status, body)!r}")
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=3)
 
 
 def main() -> int:
@@ -192,6 +232,7 @@ def main() -> int:
             server.kill()
             server.wait(timeout=3)
     qualify_yaml(ROOT / "target" / "debug" / "webhook")
+    qualify_template(ROOT / "target" / "debug" / "webhook", environment)
     print("toka-webhook CLI qualification: PASSED")
     return 0
 

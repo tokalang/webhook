@@ -1,4 +1,11 @@
-import webhook::{load_hooks, parse_default_methods, parse_hooks}
+import webhook::{load_hooks, load_hooks_with_template, parse_default_methods, parse_hooks, render_hooks_template}
+import core/result::{Result}
+import std/fs::{read_to_string}
+import stdx/text/template::{Template, TemplateContext}
+
+fn read_template_file(name: str) -> Result<string, string> {
+    return read_to_string(string::from(name))
+}
 
 fn main() -> i32 {
     auto parsed = parse_hooks("[{\"id\":\"deploy\",\"execute-command\":\"/usr/bin/true\",\"pass-arguments-to-command\":[\"--quiet\",\"--dry-run\"],\"command-working-directory\":\"/private/tmp\",\"trigger-rule\":{\"match\":{\"value\":\"correct-horse\",\"parameter\":{\"source\":\"header\",\"name\":\"X-Hook-Secret\"}}}}]")
@@ -64,6 +71,19 @@ fn main() -> i32 {
     auto yaml = load_hooks(string::from("tests/hooks.yaml"))
     assert(yaml.is_ok(), "YAML hook configuration loads")
     assert(yaml.unwrap().len() == 1:usize, "YAML hook configuration has one hook")
+
+    auto rendered_template = render_hooks_template("[{\"id\":\"template\",\"execute-command\":\"/usr/bin/true\",\"response-message\":\"{{ getenv \\\"TOKA_WEBHOOK_TEMPLATE_VALUE\\\" }}\"}]")
+    assert(rendered_template.is_ok(), "registered template helper renders configuration text")
+    auto file_template = Template::parse("{{ read_file \"tests/template-cat.txt\" }}").unwrap()
+    auto file_handler = { name => read_template_file(name) }: fn(str) -> Result<string, string>
+    auto file_context# = TemplateContext::new()
+    file_context#.register_func(cede string::from("read_file"), file_handler)
+    auto file_result = file_template.render(file_context)
+    assert(file_result.is_ok(), "file-backed template callback succeeds")
+    assert(file_result.unwrap().as_str().equals("from-cat\n"), "template callback retains file contents")
+    auto template_hooks = load_hooks_with_template(string::from("tests/hooks.template.json"), true)
+    assert(template_hooks.is_ok(), "templated JSON hook configuration loads")
+    assert(template_hooks.unwrap().len() == 1:usize, "templated hook configuration has one hook")
 
     auto default_methods = parse_default_methods("GET, POST")
     assert(default_methods.is_ok(), "default HTTP methods parse")

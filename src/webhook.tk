@@ -5,11 +5,13 @@
 
 import core/option::{Option}
 import core/result::{Result}
+import std/env
 import std/error::{IoError}
 import std/fs::{TempFile, create_temp_file, create_temp_file_system, read_to_string, write_string}
 import std/hashmap::{HashMap}
 import std/io::{remove_file}
 import std/net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}
+import std/path::{join}
 import std/process::{Command, STDIO_NULL}
 import std/bytes::{Bytes}
 import std/vec::{Vec}
@@ -20,6 +22,7 @@ import stdx/net/http::{HeaderMap, HttpMethod, HttpRequest, HttpResponse, parse_h
 import stdx/net/url::{query_decode}
 import stdx/serde/json::{JsonNode, write_escaped_json_string}
 import stdx/serde/yaml
+import stdx/text/template::{Template, TemplateContext}
 
 extern fn getpeername(fd: i32, *addr: void, *addrlen: u32) -> i32
 extern fn libc_free(*ptr: void) -> void
@@ -618,13 +621,65 @@ pub fn parse_yaml_hooks(input: str) -> Result<Vec<Hook>, string> {
     return parse_hook_root(cede parsed.unwrap())
 }
 
-pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
+fn template_getenv(name: str) -> Result<string, string> {
+    auto value = env::var(string::from(name))
+    if value.is_some() { return Result<string, string>::Ok(value.unwrap()) }
+    return Result<string, string>::Ok(string::from(""))
+}
+
+fn template_cat(name: str) -> Result<string, string> {
+    auto contents = read_to_string(string::from(name))
+    if contents.is_err() { return Result<string, string>::Ok(string::from("")) }
+    auto text# = contents.unwrap()
+    if text.len() > 0:usize && text.as_str().byte_at(text.len() - 1:usize) as u8 == '\n' as u8 {
+        auto _newline = text#.pop_char()
+    }
+    return Result<string, string>::Ok(cede text)
+}
+
+fn template_credential(name: str) -> Result<string, string> {
+    auto directory = env::var(string::from("CREDENTIALS_DIRECTORY"))
+    if directory.is_some() {
+        auto path = directory.unwrap()
+        if path.len() > 0:usize {
+            auto credential_path = join(path, string::from(name))
+            return template_cat(credential_path.as_str())
+        }
+    }
+    return template_getenv(name)
+}
+
+pub fn render_hooks_template(input: str) -> Result<string, string> {
+    auto parsed = Template::parse(input)
+    if parsed.is_err() { return Result<string, string>::Err(parsed.unwrap_err().to_string()) }
+    auto getenv_handler = { name => template_getenv(name) }: fn(str) -> Result<string, string>
+    auto cat_handler = { name => template_cat(name) }: fn(str) -> Result<string, string>
+    auto credential_handler = { name => template_credential(name) }: fn(str) -> Result<string, string>
+    auto context# = TemplateContext::new()
+    context#.register_func(cede string::from("getenv"), getenv_handler)
+    context#.register_func(cede string::from("cat"), cat_handler)
+    context#.register_func(cede string::from("credential"), credential_handler)
+    auto rendered = parsed.unwrap().render(context)
+    if rendered.is_err() { return Result<string, string>::Err(rendered.unwrap_err().to_string()) }
+    return Result<string, string>::Ok(rendered.unwrap())
+}
+
+pub fn load_hooks_with_template(path: string, as_template: bool) -> Result<Vec<Hook>, string> {
     auto contents = read_to_string(path)
     if contents.is_err() { return Result<Vec<Hook>, string>::Err(contents.unwrap_err()) }
-    auto text = contents.unwrap()
+    auto text# = contents.unwrap()
+    if as_template {
+        auto rendered = render_hooks_template(text.as_str())
+        if rendered.is_err() { return Result<Vec<Hook>, string>::Err(rendered.unwrap_err()) }
+        text = rendered.unwrap()
+    }
     auto json = parse_hooks(text.as_str())
     if json.is_ok() { return json }
     return parse_yaml_hooks(text.as_str())
+}
+
+pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
+    return load_hooks_with_template(path, false)
 }
 
 fn expected_path(hook: Hook) -> string {
@@ -1798,6 +1853,7 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
                                 cede supplied_headers: Vec<ResponseHeader>,
                                 cede supplied_default_methods: Vec<string>,
                                 cede supplied_url_prefix: string,
+                                as_template: bool,
                                 max_request_bytes: usize, timeout_ms: i32) -> async i32 {
     auto hooks_path# = cede supplied_path
     auto listener# = cede supplied_listener
@@ -1814,7 +1870,7 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
             continue
         }
         auto request = received.unwrap()
-        auto loaded = load_hooks(hooks_path.clone())
+        auto loaded = load_hooks_with_template(hooks_path.clone(), as_template)
         auto response# = HttpResponse::not_found()
         if loaded.is_err() {
             response = HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),

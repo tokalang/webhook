@@ -31,12 +31,19 @@ The optional repeatable `--header name=value` flag adds a response header to
 every result (including CORS headers). The server handles one request per
 connection and one connection at a time in this initial implementation.
 
+Pass `-template` (upstream-compatible) or `--template` to render the hooks
+file before parsing it. Webhook injects only `getenv`, `cat`, and `credential`:
+`cat` returns a file's contents without one trailing newline, while
+`credential` reads `<CREDENTIALS_DIRECTORY>/<name>` when that environment
+variable is set and otherwise behaves as `getenv`. The template engine is a
+restricted Toka subset, not full Go `text/template` compatibility.
+
 ## Current scope
 
 The implementation covers a bounded, configuration-driven subset of the
 upstream behavior. It supports request references, selected rule types,
 structured argv execution, per-child working directories/environments,
-request-temporary files, YAML hooks files, and configurable request/response policy. The
+request-temporary files, YAML hooks files, opt-in template preprocessing, and configurable request/response policy. The
 complete Linux/macOS compatibility contract is in
 [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
