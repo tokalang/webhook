@@ -1,6 +1,7 @@
-import webhook::{load_hooks, load_hooks_with_template, parse_default_methods, parse_hooks, render_hooks_template}
+import webhook::{load_hook_files, load_hooks, load_hooks_with_template, parse_default_methods, parse_hooks, render_hooks_template}
 import core/result::{Result}
 import std/fs::{read_to_string}
+import std/vec::{Vec}
 import stdx/text/template::{Template, TemplateContext}
 
 fn read_template_file(name: str) -> Result<string, string> {
@@ -84,6 +85,13 @@ fn main() -> i32 {
     auto template_hooks = load_hooks_with_template(string::from("tests/hooks.template.json"), true)
     assert(template_hooks.is_ok(), "templated JSON hook configuration loads")
     assert(template_hooks.unwrap().len() == 1:usize, "templated hook configuration has one hook")
+
+    auto hook_files# = Vec<string>::new()
+    hook_files#.push(cede string::from("tests/hooks.yaml"))
+    hook_files#.push(cede string::from("tests/hooks.additional.json"))
+    auto merged = load_hook_files(cede hook_files, false)
+    assert(merged.is_ok(), "multiple hooks files load")
+    assert(merged.unwrap().len() == 2:usize, "multiple hooks files merge in order")
 
     auto default_methods = parse_default_methods("GET, POST")
     assert(default_methods.is_ok(), "default HTTP methods parse")

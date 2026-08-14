@@ -117,7 +117,7 @@ def main() -> int:
 
     port = free_port()
     server = subprocess.Popen(
-        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--ip", "127.0.0.1", "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST", "--urlprefix", PREFIX],
+        [str(ROOT / "target" / "debug" / "webhook"), "--hooks", str(ROOT / "tests" / "hooks.json"), "--hooks", str(ROOT / "tests" / "hooks.additional.json"), "--ip", "127.0.0.1", "--port", str(port), "--header", "Access-Control-Allow-Origin=*", "--http-methods", "GET, POST", "--urlprefix", PREFIX],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -138,6 +138,9 @@ def main() -> int:
             raise RuntimeError(f"authorized webhook response was {(status, body)!r}")
         if configured_header != "configured":
             raise RuntimeError(f"configured response header was {configured_header!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/additional")
+        if status != 200 or body != b"additional accepted":
+            raise RuntimeError(f"additional hooks file response was {(status, body)!r}")
         _, _, cors_header = request(port, "correct-horse", response_header="Access-Control-Allow-Origin")
         if cors_header != "*":
             raise RuntimeError(f"global CORS header was {cors_header!r}")

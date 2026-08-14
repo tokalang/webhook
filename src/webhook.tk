@@ -682,6 +682,24 @@ pub fn load_hooks(path: string) -> Result<Vec<Hook>, string> {
     return load_hooks_with_template(path, false)
 }
 
+pub fn load_hook_files(cede paths: Vec<string>, as_template: bool) -> Result<Vec<Hook>, string> {
+    auto remaining# = cede paths
+    auto hooks# = Vec<Hook>::new()
+    loop !remaining.is_empty() {
+        auto next = remaining#.remove(0:usize)
+        if next.is_none() { return Result<Vec<Hook>, string>::Err(string::from("hooks path list changed during load")) }
+        auto loaded = load_hooks_with_template(next.unwrap(), as_template)
+        if loaded.is_err() { return Result<Vec<Hook>, string>::Err(loaded.unwrap_err()) }
+        auto file_hooks# = loaded.unwrap()
+        loop !file_hooks.is_empty() {
+            auto hook = file_hooks#.remove(0:usize)
+            if hook.is_none() { return Result<Vec<Hook>, string>::Err(string::from("loaded hooks changed during merge")) }
+            hooks#.push(cede hook.unwrap())
+        }
+    }
+    return Result<Vec<Hook>, string>::Ok(cede hooks)
+}
+
 fn expected_path(hook: Hook) -> string {
     return expected_path_at_prefix(hook, "hooks")
 }
@@ -1846,16 +1864,16 @@ pub fn serve_forever_async(cede supplied_hooks: Vec<Hook>, cede supplied_listene
     return 0:i32
 }
 
-// Reloading the JSON configuration per connection keeps the parsed rule tree
+// Reloading the hooks configuration per connection keeps the parsed rule tree
 // short-lived.  This avoids the current runtime defect in deep-cloning nested
 // enum payloads while retaining deterministic per-request configuration.
-pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listener: TcpListener,
+pub fn serve_file_forever_async(cede supplied_paths: Vec<string>, cede supplied_listener: TcpListener,
                                 cede supplied_headers: Vec<ResponseHeader>,
                                 cede supplied_default_methods: Vec<string>,
                                 cede supplied_url_prefix: string,
                                 as_template: bool,
                                 max_request_bytes: usize, timeout_ms: i32) -> async i32 {
-    auto hooks_path# = cede supplied_path
+    auto hooks_paths# = cede supplied_paths
     auto listener# = cede supplied_listener
     auto global_headers# = cede supplied_headers
     auto default_methods# = cede supplied_default_methods
@@ -1870,7 +1888,7 @@ pub fn serve_file_forever_async(cede supplied_path: string, cede supplied_listen
             continue
         }
         auto request = received.unwrap()
-        auto loaded = load_hooks_with_template(hooks_path.clone(), as_template)
+        auto loaded = load_hook_files(cede hooks_paths.clone(), as_template)
         auto response# = HttpResponse::not_found()
         if loaded.is_err() {
             response = HttpResponse(status_code = 500:i32, content_type = string::from("text/plain"),

@@ -22,7 +22,7 @@ toka build
 ./target/debug/webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'
 ```
 
-The configuration is a JSON or YAML array using upstream's `id`,
+Each repeatable `--hooks`/`-hooks` configuration is a JSON or YAML array using upstream's `id`,
 `execute-command`, `pass-arguments-to-command`, `pass-file-to-command`, and value/header
 `trigger-rule.match` keys. File bindings write each request value to a 0600
 temporary file; the configured child receives its path through `envname` (or
