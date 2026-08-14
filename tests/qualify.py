@@ -31,7 +31,7 @@ def main() -> int:
             run([str(sdk.tokac), "-I", str(sdk.library), "-I", str(ROOT / "src"),
                  str(ROOT / "tests" / (name + ".tk")), "-o", str(program)], environment)
             run([str(program)], environment)
-    run([sys.executable, str(ROOT / "tests" / "cli_qualify.py")], environment)
+    run([sys.executable, "-B", str(ROOT / "tests" / "cli_qualify.py")], environment)
     print("toka-webhook qualification: PASSED")
     return 0
 
