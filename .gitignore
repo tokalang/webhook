@@ -5,3 +5,4 @@ target/
 *.o
 *.dSYM/
 __pycache__/
+webhook-*.tar.gz
