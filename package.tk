@@ -3,7 +3,7 @@ pub const PACKAGE = (
     version = "0.1.0",
     kind = "application",
     license = "MIT",
-    compiler = "1.0.0-rc.5",
+    compiler = "1.0.0-rc.6",
     entry_modules = ("src/main.tk",),
     targets = ("macos", "linux"),
     native = (required = false, libraries = ())

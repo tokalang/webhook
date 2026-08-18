@@ -223,6 +223,9 @@ def main() -> int:
         status, body, _ = request(port, "correct-horse", "/hooks/file-base64", b"AGJhcgo=")
         if status != 200 or body != b"\x00bar\n":
             raise RuntimeError(f"base64 temporary file response was {(status, body)!r}")
+        status, body, _ = request(port, "correct-horse", "/hooks/file-mode", b"permission test")
+        if status != 200 or body.decode().strip() != "0o600":
+            raise RuntimeError(f"temporary file permission mode was {(status, body)!r}, expected 0o600")
         status, body, _ = request(port, "correct-horse", "/hooks/file-cleanup", b"cleanup")
         cleanup_path = Path(body.decode().strip())
         if status != 200 or not cleanup_path.is_absolute() or cleanup_path.exists():

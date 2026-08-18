@@ -313,5 +313,23 @@
         "parameter": {"source": "header", "name": "X-Hook-Secret"}
       }
     }
+  },
+  {
+    "id": "file-mode",
+    "execute-command": "/usr/bin/python3",
+    "pass-arguments-to-command": [
+      "-c",
+      "import os, stat, sys; p = os.environ['HOOK_DATA']; print(oct(stat.S_IMODE(os.stat(p).st_mode)))"
+    ],
+    "pass-file-to-command": [
+      {"source": "raw-request-body", "name": "data"}
+    ],
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "value": "correct-horse",
+        "parameter": {"source": "header", "name": "X-Hook-Secret"}
+      }
+    }
   }
 ]

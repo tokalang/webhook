@@ -16,7 +16,7 @@ an exclusively-created request-temporary file.
 ## Run
 
 ```sh
-curl -fsSL https://tokalang.dev/install.sh | bash -s -- v1.0.0-rc.5
+curl -fsSL https://tokalang.dev/install.sh | bash -s -- v1.0.0-rc.6
 toka doctor
 toka build
 ./target/debug/webhook --hooks hooks.json --port 9000 --header 'Access-Control-Allow-Origin=*'

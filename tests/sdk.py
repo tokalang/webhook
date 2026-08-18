@@ -46,9 +46,10 @@ def resolve_sdk() -> TokaSdk:
     missing = [
         name for name, path in (("toka", toka), ("tokac", tokac),
                                 ("TOKA_LIB/lib", library),
-                                ("toka_rt.o", library / "sys" / "toka_rt.o"))
-        if not path.is_file() and name != "TOKA_LIB/lib"
-        or name == "TOKA_LIB/lib" and not path.is_dir()
+                                ("toka_rt.o", (library / "sys" / "toka_rt.o") if library else None))
+        if path is None
+        or (name != "TOKA_LIB/lib" and not path.is_file())
+        or (name == "TOKA_LIB/lib" and not path.is_dir())
     ]
     if missing:
         raise RuntimeError(

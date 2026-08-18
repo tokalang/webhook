@@ -4,3 +4,4 @@ target/
 *.ll
 *.o
 *.dSYM/
+__pycache__/
